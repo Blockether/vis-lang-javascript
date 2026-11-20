@@ -38,9 +38,9 @@ a sandbox restart. A live REPL is never replaced, because its state is your work
 ### Environment
 
 The REPL process gets the variables of Vis, not those of a `.env` file: Node does not read `.env`
-by itself. `env_file` names a dotenv file, relative to `cwd`, whose variables the REPL gets. Lines
-are `NAME=value`, optionally after `export`, and variables are not expanded. `NODE_OPTIONS` from
-the file is skipped, because it would load other code into the REPL.
+by itself, and Bun starts with `--no-env-file`. `env_file` names a dotenv file, relative to `cwd`, whose variables the REPL gets. Lines
+are `NAME=value`, optionally after `export`, and variables are not expanded. `NODE_OPTIONS` and
+`BUN_OPTIONS` from the file are skipped, because they would load other code into the REPL.
 
 The variables that a `before` op hook on `js.repl_start` adds with `vis.with_env` win over the
 file. A live REPL with other variables is refused.
@@ -86,11 +86,13 @@ needs the metadata that the TypeScript compiler emits.
 
 - `"auto"` reads `entryFile` and `sourceRoot` from `nest-cli.json` and takes the newer of
   `dist/<entry>.js` and `dist/<sourceRoot>/<entry>.js`. Pass a path, relative to `cwd`, to choose.
+- `"auto"` reads only the top-level keys of `nest-cli.json`. For an app under `projects`, pass its
+  built entry, for example `nest="dist/worker/main.js"`.
 - The entry runs up to its `NestFactory` call. The REPL makes an application context from the
   same root module. The app does not listen.
 - `init` is `False` by default, so no lifecycle hook runs: no queue, schedule or connection that
   `onModuleInit` starts. Run `await app.init()` later, or start with `init=True`.
-- `detail` says when a source in `src` is newer than the build.
+- `detail` says when a source in `sourceRoot` is newer than the build.
 
 The REPL binds these names:
 
@@ -98,8 +100,8 @@ The REPL binds these names:
 | --- | --- |
 | `get`, `$`, `resolve`, `select`, `debug`, `methods`, `help` | Nest's own REPL functions. |
 | Each provider, controller and module class | The class, by its name. |
-| `svc(name)` | The provider or controller instance with that class name. |
-| `services(regex)` | The names that `svc` accepts. |
+| `svc(name)` | The provider or controller instance with that class name. A request-scoped or transient provider is refused: use `await resolve(X)`. |
+| `services(regex)` | The names of the providers and controllers. |
 | `load(path)` | `require` of a path in the build output, or of a package. |
 | `app` | The application context. |
 | `checkpoint()` | Stops the eval here when it was interrupted. |
