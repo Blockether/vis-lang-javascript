@@ -1,7 +1,8 @@
 # vis-lang-javascript
 
-JavaScript and TypeScript tools for [Vis](https://github.com/Blockether/vis) on Node.js: Jest,
-Vitest and node:test runs and a managed project REPL. Tests and the REPL use your project's Node.
+JavaScript and TypeScript tools for [Vis](https://github.com/Blockether/vis) on Node.js and Bun:
+Jest, Vitest, bun test and node:test runs and a managed project REPL. Tests and the REPL use your
+project's runtime: Bun when the project has a Bun lockfile or `"packageManager": "bun@…"`, else Node.
 
 ## Install
 
@@ -9,15 +10,16 @@ Vitest and node:test runs and a managed project REPL. Tests and the REPL use you
 vis-agent extension install blockether/vis-lang-javascript --global --trust
 ```
 
-Use Vis 0.5.2 or later. Put Node 22.18 or newer on `PATH`. Install Jest or Vitest in each project
-that declares it in `package.json`. Projects without either run on node:test.
+Use Vis 0.5.2 or later. Put Node 22.18 or newer, Bun 1.4.5 or newer, or both on `PATH`. Install
+Jest or Vitest in each project that declares it in `package.json`. Projects without either run on
+bun test or node:test.
 
 ## Use
 
 | Tool | Purpose |
 | --- | --- |
-| `js.run_tests` | Run Vitest, Jest or node:test. Set `keyword` to filter tests by name. |
-| `js.repl_start` | Start a Node REPL for the project directory. |
+| `js.run_tests` | Run Vitest, Jest, bun test or node:test. Set `keyword` to filter tests by name. |
+| `js.repl_start` | Start a Node or Bun REPL for the project directory. Set `runtime` to choose. |
 | `js.repl_status` | Check if the project's REPL is active. |
 | `js.repl_eval` | Evaluate JavaScript or TypeScript in the active REPL. Declarations stay between calls. |
 | `js.repl_stop` | Stop the project's REPL. |
@@ -35,4 +37,4 @@ handling and REPL behavior. Results follow the [language contract](https://githu
 uv run pytest tests -q
 ```
 
-The tests need `node` on `PATH`. Format and lint with `uv run ruff format` and `uv run ruff check`.
+A test that needs `node` or `bun` on `PATH` is skipped without it. Format and lint with `uv run ruff format` and `uv run ruff check`.
