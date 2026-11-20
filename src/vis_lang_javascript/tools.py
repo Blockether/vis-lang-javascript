@@ -139,8 +139,8 @@ class JavaScriptTools:
         A live REPL is never replaced, because its state is the work: "auto"
         keeps it, and a live REPL on another named runtime is refused. It gets
         the variables that a `before` op hook on `js.repl_start` adds with
-        `vis.with_env`, over those of env_file; NODE_OPTIONS from the file is
-        skipped. A live REPL with other variables is refused.
+        `vis.with_env`, over those of env_file; NODE_OPTIONS and BUN_OPTIONS
+        from the file are skipped. A live REPL with other variables is refused.
 
         With nest, the REPL loads the built app (build it first) up to its
         NestFactory call and makes an application context from that root
@@ -148,6 +148,7 @@ class JavaScriptTools:
         Nest's REPL functions are bound (get, $, resolve, select, debug,
         methods, help), every provider, controller and module class by name, and
         svc(name), services(regex), load(path in dist), app and checkpoint().
+        svc refuses a request-scoped or transient provider: use await resolve(X).
         A `.vis/js-repl.cjs` in cwd or a parent can export before(ctx) and
         bindings(ctx). An interrupted eval fails at its next fetch, HTTP, pg or
         ioredis call. Raises ToolMissing when the runtime is not on PATH and
@@ -165,7 +166,9 @@ class JavaScriptTools:
             entry = nest_app.entry(directory, nest)
             options["profile"] = {"kind": "nest", "entry": entry, "init": bool(init)}
             if nest_app.stale(entry, directory):
-                notes.append("the build is older than src: rebuild for the newest code")
+                notes.append(
+                    "the build is older than its sources: rebuild for the newest code"
+                )
         if env:
             options["env"] = env
             options["env_fingerprint"] = env_fingerprint(env)

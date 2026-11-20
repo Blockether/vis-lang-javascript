@@ -10,9 +10,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-SKIPPED = ("NODE_OPTIONS",)
+SKIPPED = ("NODE_OPTIONS", "BUN_OPTIONS")
 """Names a file does not set: the REPL starts its runtime with its own options,
-and NODE_OPTIONS would load the code that the file names into it."""
+and NODE_OPTIONS on Node or BUN_OPTIONS on Bun would load the code that the file
+names into it."""
 
 _LINE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 

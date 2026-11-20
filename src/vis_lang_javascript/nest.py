@@ -12,15 +12,20 @@ import json
 from pathlib import Path
 
 
-def _candidates(cwd):
-    """Entry files that `nest build` can write, newest layout first."""
-    entry_file, source_root = "main", "src"
+def _config(cwd):
+    """The entryFile and sourceRoot of nest-cli.json in `cwd`, else Nest's defaults."""
     try:
         config = json.loads((cwd / "nest-cli.json").read_text(encoding="utf-8"))
-        entry_file = str(config.get("entryFile") or entry_file)
-        source_root = str(config.get("sourceRoot") or source_root)
     except (OSError, ValueError):
-        pass
+        config = {}
+    return str(config.get("entryFile") or "main"), str(
+        config.get("sourceRoot") or "src"
+    )
+
+
+def _candidates(cwd):
+    """Entry files that `nest build` can write, newest layout first."""
+    entry_file, source_root = _config(cwd)
     for dist in ("dist", f"dist/{source_root}"):
         yield cwd / dist / f"{entry_file}.js"
 
@@ -47,7 +52,7 @@ def entry(cwd, wanted):
 
 
 def stale(entry_file, cwd):
-    """Whether a TypeScript source under `cwd`/src is newer than `entry_file`."""
+    """Whether a TypeScript source under the sourceRoot of `cwd` is newer than `entry_file`."""
     built = Path(entry_file).stat().st_mtime
-    sources = Path(cwd) / "src"
+    sources = Path(cwd) / _config(Path(cwd))[1]
     return any(path.stat().st_mtime > built for path in sources.rglob("*.ts"))

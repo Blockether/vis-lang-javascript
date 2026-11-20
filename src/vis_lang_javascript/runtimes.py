@@ -32,7 +32,8 @@ NODE = Runtime(
 BUN = Runtime(
     "bun",
     "Bun",
-    (),
+    # Bun reads .env by itself; the REPL gets only the variables of env_file.
+    ("--no-env-file",),
     # The release the Bun driver is checked on.
     (1, 4, 5),
 )

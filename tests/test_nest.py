@@ -1,11 +1,13 @@
 """The NestJS profile of the REPL, on the app in tests/fixtures/nest-app."""
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 from conftest import is_installed
 
+from vis_lang_javascript import nest, repl
 from vis_lang_javascript.repl import ReplError
 from vis_lang_javascript.tools import JavaScriptTools
 
@@ -56,6 +58,26 @@ def test_nest_functions_and_our_own_are_bound(app):
         "load('./greeter.service').GreeterService === GreeterService", cwd=cwd
     )
     assert loaded.value == "true"
+
+
+@pytest.mark.parametrize(
+    "name, scope, field",
+    [("RequestContext", "request-scoped", "id"), ("Stamp", "transient", "at")],
+)
+def test_svc_refuses_a_scoped_provider(app, name, scope, field):
+    tools, cwd, runtime = app
+    tools.repl_start(cwd=cwd, runtime=runtime, nest="auto")
+    failed = tools.repl_eval(f"svc('{name}')", cwd=cwd)
+    assert f"{scope}; use await resolve({name})" in failed.error
+    found = tools.repl_eval(f"typeof (await resolve({name})).{field}", cwd=cwd)
+    assert found.value == "'number'"
+
+
+def test_a_new_python_process_keeps_the_app_detail(app):
+    tools, cwd, runtime = app
+    tools.repl_start(cwd=cwd, runtime=runtime, nest="auto")
+    repl.detach_all()
+    assert "Nest AppModule, " in tools.repl_status(cwd=cwd).detail
 
 
 def test_init_runs_the_lifecycle_hooks(app):
@@ -118,3 +140,15 @@ def test_an_unbuilt_app_names_the_build(tmp_path):
     (tmp_path / "nest-cli.json").write_text('{"entryFile": "main"}')
     with pytest.raises(FileNotFoundError, match="nest build"):
         JavaScriptTools().repl_start(cwd=str(tmp_path), nest="auto")
+
+
+def test_stale_reads_the_source_root(tmp_path):
+    (tmp_path / "nest-cli.json").write_text('{"sourceRoot": "app"}')
+    built = tmp_path / "dist" / "main.js"
+    built.parent.mkdir()
+    built.write_text("")
+    (tmp_path / "app").mkdir()
+    source = tmp_path / "app" / "main.ts"
+    source.write_text("")
+    os.utime(built, (0, 0))
+    assert nest.stale(built, tmp_path)

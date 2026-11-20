@@ -1,5 +1,4 @@
-// The evaluator of a JavaScript REPL, on Node.js or Bun: what the managed REPL
-// (driver.mjs) and a REPL inside a running Node process (connect.mjs) share.
+// The evaluator of the managed JavaScript REPL (driver.mjs), on Node.js or Bun.
 // Declarations live between evaluations: on Node in one node:repl context, on
 // Bun because Bun.Transpiler's replMode hoists them to globals. Each eval runs
 // in one AsyncLocalStorage store (cancel.cjs), which owns what it prints and

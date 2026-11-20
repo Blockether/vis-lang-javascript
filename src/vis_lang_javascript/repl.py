@@ -224,6 +224,15 @@ def _kept_directory(command):
     return None
 
 
+def _saved(place, name):
+    """The JSON object that a start saved as `name` in `place`, else {}."""
+    try:
+        with open(os.path.join(place, name), encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
 def _kept(cwd):
     """The REPL that an earlier Python process left running for `cwd`, or None.
 
@@ -257,17 +266,9 @@ def _kept(cwd):
     if live.pid != shell.get("pid"):
         live.stop()
         return None
-    try:
-        with open(os.path.join(place, "env.json"), encoding="utf-8") as handle:
-            fingerprint = json.load(handle)
-    except (OSError, ValueError):
-        fingerprint = {}
-    kept = _Repl(live, cwd, fingerprint, place, kind)
-    try:
-        with open(os.path.join(place, "profile.json"), encoding="utf-8") as handle:
-            kept.profile = json.load(handle)
-    except (OSError, ValueError):
-        pass
+    kept = _Repl(live, cwd, _saved(place, "env.json"), place, kind)
+    kept.profile = _saved(place, "profile.json")
+    kept.setup = _saved(place, "setup.json")
     # An earlier process may have left code running in it.
     kept.stuck = True
     return kept
@@ -416,6 +417,11 @@ def start(options=None):
                 if not setup.get("ok"):
                     raise ReplError(f"the Nest app did not start: {setup.get('exc')}")
                 repl.setup = {k: v for k, v in setup.items() if k not in ("id", "ok")}
+                # A later Python process reads it back in _kept.
+                with open(
+                    os.path.join(repl.place, "setup.json"), "w", encoding="utf-8"
+                ) as handle:
+                    json.dump(repl.setup, handle)
         except BaseException as ex:
             tail = repl.live.log_tail(STDERR_TAIL_LINES)
             repl.kill()

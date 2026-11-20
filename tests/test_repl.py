@@ -170,13 +170,16 @@ def test_bun_runs_a_static_import_and_a_declaration_again(project, runtime, tmp_
 
 def test_an_env_file_reaches_the_repl(project, tmp_path):
     tools, cwd = project
-    # Not `.env`, which Bun reads by itself.
+    (tmp_path / ".env").write_text("UNNAMED=1\n")
     (tmp_path / "vars.env").write_text(
-        "GREETING=hello\nNODE_OPTIONS=--require ./x.cjs\n"
+        "GREETING=hello\nNODE_OPTIONS=--require ./x.cjs\nBUN_OPTIONS=--preload ./x.cjs\n"
     )
     detail = tools.repl_start(cwd=cwd, env_file="vars.env").detail
     assert "NODE_OPTIONS from vars.env skipped" in detail
+    assert "BUN_OPTIONS from vars.env skipped" in detail
     answer = tools.repl_eval(
-        "[process.env.GREETING, process.env.NODE_OPTIONS]", cwd=cwd
+        "[process.env.GREETING, process.env.NODE_OPTIONS, process.env.BUN_OPTIONS,"
+        " process.env.UNNAMED]",
+        cwd=cwd,
     )
-    assert answer.value == "[ 'hello', undefined ]"
+    assert answer.value == "[ 'hello', undefined, undefined, undefined ]"

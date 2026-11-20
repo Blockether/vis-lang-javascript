@@ -73,8 +73,8 @@ async function rootModule(entry) {
   }
 }
 
-/** Provider and controller instances by class name, across every module. */
-function instances(app) {
+/** Provider and controller wrappers by class name, across every module. */
+function wrappers(app) {
   const index = new Map();
   for (const moduleRef of app.container.getModules().values()) {
     for (const wrapper of [...moduleRef.providers.values(), ...moduleRef.controllers.values()]) {
@@ -82,7 +82,7 @@ function instances(app) {
       // name does not.
       const { token } = wrapper;
       const name = typeof token === 'function' ? token.name : typeof token === 'string' ? token : '';
-      if (name && wrapper.instance && !index.has(name)) index.set(name, wrapper.instance);
+      if (name && wrapper.instance && !index.has(name)) index.set(name, wrapper);
     }
   }
   return index;
@@ -110,11 +110,17 @@ function expose(app, { entry, dist, hooks }) {
   const own = {
     app,
     svc(name) {
-      const found = instances(app).get(name);
-      if (!found) throw new Error(`svc: no provider or controller named ${name}; services() lists them`);
-      return found;
+      const wrapper = wrappers(app).get(name);
+      if (!wrapper) throw new Error(`svc: no provider or controller named ${name}; services() lists them`);
+      // A request-scoped or transient wrapper holds only a prototype, not an instance.
+      if (wrapper.isTransient || !wrapper.isDependencyTreeStatic()) {
+        const token = typeof wrapper.token === 'string' ? JSON.stringify(name) : name;
+        const scope = wrapper.isTransient ? 'transient' : 'request-scoped';
+        throw new Error(`svc: ${name} is ${scope}; use await resolve(${token})`);
+      }
+      return wrapper.instance;
     },
-    services: (pattern) => [...instances(app).keys()].filter((name) => !pattern || pattern.test(name)).sort(),
+    services: (pattern) => [...wrappers(app).keys()].filter((name) => !pattern || pattern.test(name)).sort(),
     load: (specifier) => entryRequire(/^\.\.?([\\/]|$)/.test(specifier) ? path.resolve(dist, specifier) : specifier),
     checkpoint: cancel.checkpoint,
   };
