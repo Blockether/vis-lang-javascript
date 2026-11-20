@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: ruff + pytest (Node ${{ matrix.node }})
+    name: ruff + pytest (Node ${{ matrix.node }}, Bun 1.4.5)
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +22,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.5"
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
