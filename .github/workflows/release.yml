@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: ruff + pytest (Node 22.18)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22.18"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pytest tests -q
+
+  release:
+    name: Publish the GitHub release
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check that the tag matches the declared version
+        run: |
+          set -euo pipefail
+          declared=$(python3 -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "v$declared" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pyproject version $declared." >&2
+            exit 1
+          fi
+      - name: Check that the extension declares the same version
+        run: |
+          set -euo pipefail
+          declared=$(python3 -c "import re,pathlib;print(re.search(r'version=\"([^\"]+)\"', pathlib.Path('extension.py').read_text()).group(1))")
+          if [ "v$declared" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match the extension version $declared." >&2
+            exit 1
+          fi
+      # Blockether/vis runs "Publish reviewed extension" daily for first-party
+      # extensions; a manual dispatch there publishes this release at once.
+      - uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
