@@ -1,8 +1,8 @@
 [project]
 name = "vis-lang-javascript"
-version = "0.1.0"
+version = "0.1.1"
 description = "JavaScript and TypeScript tools for Vis on Node.js: test runs and a managed REPL."
-keywords = ["javascript", "typescript", "node", "development"]
+keywords = ["javascript", "typescript"]
 requires-python = ">=3.12"
 dependencies = [
   "vis-agent>=0.5.2",
