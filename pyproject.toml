@@ -1,0 +1,27 @@
+[project]
+name = "vis-lang-javascript"
+version = "0.1.0"
+description = "JavaScript and TypeScript tools for Vis on Node.js: test runs and a managed REPL."
+keywords = ["javascript", "typescript", "node", "development"]
+requires-python = ">=3.12"
+dependencies = [
+  "vis-agent>=0.5.2",
+  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v3.5.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.14"]
+
+[tool.vis]
+category = "tools"
+source_paths = ["src"]
+
+[tool.ruff]
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+python_classes = []
