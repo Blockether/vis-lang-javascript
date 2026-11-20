@@ -30,6 +30,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync
+      - run: npm ci --prefix tests/fixtures/nest-app
       - run: uv run ruff format --check .
       - run: uv run ruff check .
       - run: uv run pytest tests -q

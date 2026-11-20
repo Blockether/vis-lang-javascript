@@ -29,7 +29,12 @@ from vis_lang_interface.process import shell_call
 
 from vis_lang_javascript import runtimes
 
-DRIVER = (Path(__file__).parent / "driver.mjs").read_text(encoding="utf-8")
+HERE = Path(__file__).parent
+SOURCES = {
+    name: (HERE / name).read_text(encoding="utf-8")
+    for name in ("driver.mjs", "core.mjs", "cancel.cjs", "nest.cjs")
+}
+"""The runtime's own files, placed together in its rendezvous."""
 
 LOADER = (
     "const { pathToFileURL } = await import('node:url');"
@@ -45,10 +50,27 @@ def command(runtime):
 
 
 STARTUP_TIMEOUT_S = 20.0
+SETUP_TIMEOUT_S = 120.0
+"""Seconds a profile, such as the Nest application context, gets to start."""
 DEFAULT_EVAL_TIMEOUT_S = 30.0
-INTERRUPT_GRACE_S = 2.0
+INTERRUPT_GRACE_S = 5.0
+"""Longer than the driver's own grace (CANCEL_GRACE_MS) before it abandons a promise."""
 ANSWER_CHECK_S = 1.0
 STDERR_TAIL_LINES = 40
+
+INTERRUPTED = {
+    "": "The code was interrupted. The REPL answers again, and the changes the"
+    " code made before it stopped stay. A promise that it started can still run.",
+    "io": "The code was interrupted at its next I/O call, which failed. The REPL"
+    " answers again, and the changes the code made before it stopped stay. A"
+    " request it had already sent may have run.",
+    "abandoned": "The code was interrupted. The REPL answers again, and the changes"
+    " the code made before it stopped stay. The promise it waited on was abandoned:"
+    " it made no I/O call since the interrupt and can still run, but its next"
+    " fetch, HTTP, pg or ioredis call fails.",
+}
+"""How an interrupted eval ended, by the driver's `interrupted`: by the signal or
+by itself, at a refused I/O call, or abandoned after the grace."""
 
 BUSY = "The REPL is busy: code from an earlier eval still runs in it."
 
@@ -71,6 +93,9 @@ class _Repl:
         self.runtime = runtime
         self.version = ""
         self.stuck = False
+        self.interrupted = ""
+        self.profile = {}
+        self.setup = {}
         # A kept runtime can still hold answers to an earlier process's calls,
         # so every id carries a prefix of this object's own.
         self.prefix = secrets.token_hex(4)
@@ -112,6 +137,7 @@ class _Repl:
         finally:
             self.lock.release()
         self.version = str(pong.get("version") or self.version)
+        self.interrupted = str(pong.get("interrupted") or "")
         is_idle = pong.get("pong") is True
         if is_idle:
             self.stuck = False
@@ -152,11 +178,7 @@ class _Repl:
         """Interrupt the code of a timed-out eval, and say whether it stopped."""
         said = f"{self.runtime.label} eval timed out after {int(timeout_s * 1000)}ms"
         if self.interrupt() and self.settles(INTERRUPT_GRACE_S):
-            return (
-                f"{said}. The code was interrupted. The REPL answers again, and the"
-                " changes the code made before it stopped stay. A promise that it"
-                " started can still run."
-            )
+            return f"{said}. {INTERRUPTED.get(self.interrupted, INTERRUPTED[''])}"
         self.stuck = True
         return (
             f"{said}, and the code did not stop on the interrupt. The REPL is busy"
@@ -241,6 +263,11 @@ def _kept(cwd):
     except (OSError, ValueError):
         fingerprint = {}
     kept = _Repl(live, cwd, fingerprint, place, kind)
+    try:
+        with open(os.path.join(place, "profile.json"), encoding="utf-8") as handle:
+            kept.profile = json.load(handle)
+    except (OSError, ValueError):
+        pass
     # An earlier process may have left code running in it.
     kept.stuck = True
     return kept
@@ -269,6 +296,10 @@ def _status(cwd, repl):
             answer["version"] = repl.version
         if repl.env_fingerprint:
             answer["env"] = dict(repl.env_fingerprint)
+        if repl.profile:
+            answer["profile"] = dict(repl.profile)
+        if repl.setup:
+            answer["setup"] = dict(repl.setup)
     return answer
 
 
@@ -321,7 +352,15 @@ def start(options=None):
                 for name in {*live.env_fingerprint, *wanted}
                 if live.env_fingerprint.get(name) != wanted.get(name)
             )
-            if differing:
+            profile = dict(options.get("profile") or {})
+            if profile != live.profile:
+                answer["result"] = "failed"
+                answer["message"] = (
+                    f"The REPL for {abbreviate_home(cwd)} already runs"
+                    f" {_profile_label(live.profile)}. Call js.repl_stop(), then start it"
+                    f" {_profile_label(profile)}."
+                )
+            elif differing:
                 answer["result"] = "failed"
                 answer["message"] = (
                     f"The {live.runtime.label} REPL for {abbreviate_home(cwd)} already runs with a"
@@ -334,9 +373,13 @@ def start(options=None):
         chosen = runtimes.choose(cwd, wanted_runtime)
         meeting = runtime.Rendezvous(chosen.name).open()
         try:
-            meeting.place("driver.mjs", DRIVER)
+            for name, text in SOURCES.items():
+                meeting.place(name, text)
             meeting.place(
                 "env.json", json.dumps(dict(options.get("env_fingerprint") or {}))
+            )
+            meeting.place(
+                "profile.json", json.dumps(dict(options.get("profile") or {}))
             )
             os.mkfifo(os.path.join(meeting.path, "interrupt"))
             live = runtime.start(
@@ -350,6 +393,7 @@ def start(options=None):
             meeting.close()
             raise
         repl = _Repl(live, cwd, options.get("env_fingerprint"), meeting.path, chosen)
+        repl.profile = dict(options.get("profile") or {})
         try:
             pong = repl.live.request(
                 {"op": "ping", "id": "start"}, STARTUP_TIMEOUT_S, wants="start"
@@ -365,6 +409,13 @@ def start(options=None):
                     f"{chosen.label} {repl.version} is too old: the REPL needs"
                     f" {chosen.label} {'.'.join(map(str, chosen.minimum))} or newer"
                 )
+            if repl.profile:
+                setup = repl.live.request(
+                    {"op": "setup", "id": "setup"}, SETUP_TIMEOUT_S, wants="setup"
+                )
+                if not setup.get("ok"):
+                    raise ReplError(f"the Nest app did not start: {setup.get('exc')}")
+                repl.setup = {k: v for k, v in setup.items() if k not in ("id", "ok")}
         except BaseException as ex:
             tail = repl.live.log_tail(STDERR_TAIL_LINES)
             repl.kill()
@@ -382,6 +433,12 @@ def start(options=None):
         answer = _status(cwd, repl)
         answer["result"] = "started"
         return answer
+
+
+def _profile_label(profile):
+    if profile.get("kind") == "nest":
+        return f"with the Nest app of {abbreviate_home(profile.get('entry', ''))}"
+    return "without a profile"
 
 
 def stop(options=None):

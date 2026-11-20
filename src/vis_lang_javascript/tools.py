@@ -20,7 +20,8 @@ from vis_lang_interface import (
     string_list,
 )
 
-from vis_lang_javascript import repl, runner, runtimes
+from vis_lang_javascript import envfile, repl, runner, runtimes
+from vis_lang_javascript import nest as nest_app
 
 MARKERS = ("package.json", ".git")
 
@@ -35,6 +36,15 @@ def _session(answer):
     if is_running and answer.get("runtime"):
         label = runtimes.label(answer["runtime"])
         detail.append(" ".join(filter(None, [label, answer.get("version")])))
+    setup = answer.get("setup") or {}
+    if is_running and setup.get("kind") == "nest":
+        detail.append(
+            f"Nest {setup.get('module')}{' initialized' if setup.get('init') else ''},"
+            f" {setup.get('bound')} names bound"
+        )
+        if setup.get("skipped"):
+            detail.append("not bound over globals: " + ", ".join(setup["skipped"]))
+    detail += answer.get("notes") or []
     if answer.get("busy"):
         detail += ["busy", str(answer.get("message") or "")]
     return ReplSession(
@@ -107,6 +117,19 @@ class JavaScriptTools:
         runtime: Annotated[
             str, "auto (Bun when the project uses it, else Node), node or bun."
         ] = "auto",
+        nest: Annotated[
+            str,
+            "Built NestJS entry file to load the app from, relative to cwd, or"
+            " auto for the one nest-cli.json names; empty for a plain REPL.",
+        ] = "",
+        init: Annotated[
+            bool,
+            "Run the Nest app's init: lifecycle hooks, and with them its queues,"
+            " schedules and connections.",
+        ] = False,
+        env_file: Annotated[
+            str, "Dotenv file, relative to cwd, whose variables the REPL gets."
+        ] = "",
     ) -> ReplSession:
         """Start a persistent REPL for this directory, or keep the live one.
 
@@ -116,19 +139,40 @@ class JavaScriptTools:
         A live REPL is never replaced, because its state is the work: "auto"
         keeps it, and a live REPL on another named runtime is refused. It gets
         the variables that a `before` op hook on `js.repl_start` adds with
-        `vis.with_env`; a live REPL with other variables is refused. Raises
-        ToolMissing when the runtime is not on PATH and RuntimeError when it
-        fails its startup handshake.
+        `vis.with_env`, over those of env_file; NODE_OPTIONS from the file is
+        skipped. A live REPL with other variables is refused.
+
+        With nest, the REPL loads the built app (build it first) up to its
+        NestFactory call and makes an application context from that root
+        module. It does not listen, and without init no lifecycle hook runs.
+        Nest's REPL functions are bound (get, $, resolve, select, debug,
+        methods, help), every provider, controller and module class by name, and
+        svc(name), services(regex), load(path in dist), app and checkpoint().
+        A `.vis/js-repl.cjs` in cwd or a parent can export before(ctx) and
+        bindings(ctx). An interrupted eval fails at its next fetch, HTTP, pg or
+        ioredis call. Raises ToolMissing when the runtime is not on PATH and
+        RuntimeError when it fails its startup handshake.
         """
-        options = {"cwd": str(self._absolute(cwd)), "runtime": runtime}
-        env = call_env()
+        directory = self._absolute(cwd)
+        options = {"cwd": str(directory), "runtime": runtime}
+        notes = []
+        env = {}
+        if env_file:
+            env, skipped = envfile.read(directory / env_file)
+            notes += [f"{name} from {env_file} skipped" for name in skipped]
+        env.update(call_env())
+        if nest:
+            entry = nest_app.entry(directory, nest)
+            options["profile"] = {"kind": "nest", "entry": entry, "init": bool(init)}
+            if nest_app.stale(entry, directory):
+                notes.append("the build is older than src: rebuild for the newest code")
         if env:
             options["env"] = env
             options["env_fingerprint"] = env_fingerprint(env)
         answer = repl.start(options)
         if answer.get("result") == "failed":
             raise RuntimeError(answer.get("message") or "The REPL did not start")
-        return _session(answer)
+        return _session(dict(answer, notes=notes))
 
     def repl_status(
         self,

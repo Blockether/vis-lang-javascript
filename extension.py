@@ -79,6 +79,9 @@ PROMPT = prompt.routing(
         ' `"packageManager": "bun@..."`, else Node; pass "node" or "bun" to choose.',
         "`js.run_tests` runs Vitest or Jest when package.json declares it, else bun test on"
         " Bun or node:test on Node.",
+        '`js.repl_start(nest="auto")` loads a built NestJS app without listening or init:'
+        " `svc(name)`, `get(Class)`, `services()` and `methods(Class)` reach its providers."
+        ' `env_file=".env"` gives the REPL the variables of a dotenv file.',
     ),
     tools=JavaScriptTools,
 )
@@ -100,7 +103,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-javascript",
         description="JavaScript and TypeScript tools on Node.js and Bun: test runs and a managed REPL.",
-        version="0.1.1",
+        version="0.2.0",
         alias="js",
         symbols=[
             vis.Symbol(JavaScriptTools(workspace_root=vis.workspace_root), name="js")
