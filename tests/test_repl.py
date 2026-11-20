@@ -51,8 +51,21 @@ def test_output_and_errors_come_back(project):
     printed = tools.repl_eval("console.log('hello'); console.error('warn')", cwd=cwd)
     assert printed.output == "hello\nwarn\n"
     failed = tools.repl_eval("throw new TypeError('boom')", cwd=cwd)
-    assert failed.error.startswith("TypeError: boom")
-    assert "driver.mjs" not in failed.error
+    assert failed.error == "TypeError: boom\n    at REPL:1:7"
+
+
+def test_an_error_keeps_the_frames_of_the_code_and_drops_the_driver(project, tmp_path):
+    tools, cwd = project
+    (tmp_path / "lib.mjs").write_text(
+        "export const fail = () => [1].map(() => { throw new Error('deep') });\n"
+    )
+    tools.repl_start(cwd=cwd)
+    tools.repl_eval("const { fail } = await import('./lib.mjs')", cwd=cwd)
+    frames = tools.repl_eval("fail()", cwd=cwd).error.splitlines()
+    assert frames[0] == "Error: deep"
+    assert "lib.mjs:1:" in frames[1]
+    assert "Array.map (<anonymous>)" in frames[2]
+    assert frames[-1] == "    at REPL:1:1"
 
 
 def test_code_that_does_not_parse_runs_none_of_its_statements(project):

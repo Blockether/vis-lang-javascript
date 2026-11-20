@@ -39,10 +39,18 @@ const server = repl.start({
   prompt: '',
 });
 
+const FRAME = /^\s+at /;
+const INTERNAL = /^\s+at (node:|.*(\(node:|driver\.mjs))/;
+// The driver's own frames, such as `new Promise (<anonymous>)`, follow the
+// last frame of the code; anonymous frames between code frames stay.
+const OUTER = /^\s+at (node:|.*(\(node:|driver\.mjs|\(<anonymous>\)$))/;
 const errorText = (err) => {
   if (err instanceof Error) {
     const lines = util.inspect(err, { depth: 3 }).split('\n');
-    return lines.filter((line, i) => i === 0 || !/^\s+at (node:|.*(\(node:|driver\.mjs))/.test(line)).join('\n');
+    const last = lines.findLastIndex((line) => FRAME.test(line) && !OUTER.test(line));
+    return lines
+      .filter((line, i) => !FRAME.test(line) || (i <= last && !INTERNAL.test(line)))
+      .join('\n');
   }
   return 'Uncaught ' + util.inspect(err, { depth: 3 });
 };
