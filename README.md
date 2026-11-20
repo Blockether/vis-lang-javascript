@@ -19,13 +19,15 @@ bun test or node:test.
 | Tool | Purpose |
 | --- | --- |
 | `js.run_tests` | Run Vitest, Jest, bun test or node:test. Set `keyword` to filter tests by name. |
-| `js.repl_start` | Start a Node or Bun REPL for the project directory. Set `runtime` to choose. |
+| `js.repl_start` | Start a Node or Bun REPL for the project directory. Set `runtime` to choose, `nest` to load a built NestJS app and `env_file` to pass a dotenv file. |
 | `js.repl_status` | Check if the project's REPL is active. |
 | `js.repl_eval` | Evaluate JavaScript or TypeScript in the active REPL. Declarations stay between calls. |
 | `js.repl_stop` | Stop the project's REPL. |
 
 ```python
 js.run_tests(["src"], keyword="parser")
+js.repl_start(cwd="apps/api", nest="auto", env_file="../../.env")
+js.repl_eval("await svc('UsersService').findOne(1)", cwd="apps/api")
 ```
 
 See the [JavaScript toolchain reference](docs/toolchain.md) for runner selection, TypeScript
@@ -34,7 +36,9 @@ handling and REPL behavior. Results follow the [language contract](https://githu
 ## Development
 
 ```bash
+npm ci --prefix tests/fixtures/nest-app
 uv run pytest tests -q
 ```
 
-A test that needs `node` or `bun` on `PATH` is skipped without it. Format and lint with `uv run ruff format` and `uv run ruff check`.
+A test that needs `node` or `bun` on `PATH` is skipped without it. The NestJS tests are skipped
+without the fixture's `node_modules`. Format and lint with `uv run ruff format` and `uv run ruff check`.
