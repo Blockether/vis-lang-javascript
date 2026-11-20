@@ -117,6 +117,21 @@ class _Repl:
             self.stuck = False
         return is_idle
 
+    def settles(self, timeout_s):
+        """Whether the driver answers as idle before `timeout_s` passes.
+
+        The driver can read a ping before the interrupt's signal, and then it
+        is still busy, so the ping repeats until the deadline.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            if self.answers(left):
+                return True
+            time.sleep(min(0.05, max(left, 0)))
+
     def interrupt(self):
         """Write one byte to the driver's interrupt FIFO."""
         try:
@@ -136,7 +151,7 @@ class _Repl:
     def timed_out(self, timeout_s):
         """Interrupt the code of a timed-out eval, and say whether it stopped."""
         said = f"Node eval timed out after {int(timeout_s * 1000)}ms"
-        if self.interrupt() and self.answers(INTERRUPT_GRACE_S):
+        if self.interrupt() and self.settles(INTERRUPT_GRACE_S):
             return (
                 f"{said}. The code was interrupted. The REPL answers again, and the"
                 " changes the code made before it stopped stay. A promise that it"

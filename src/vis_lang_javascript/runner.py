@@ -103,6 +103,17 @@ def _line_in(text, path):
     return int(found.group(1)) if found else 0
 
 
+STACK_FRAME = re.compile(r"(?:file://)?(/[^\s:()'\"]+):(\d+):\d+")
+
+
+def _stack_location(text):
+    """The file and line of the first stack frame outside node_modules."""
+    for found in STACK_FRAME.finditer(text or ""):
+        if "/node_modules/" not in found.group(1):
+            return found.group(1), int(found.group(2))
+    return "", 0
+
+
 def junit_result(xml, root, output="", duration_ms=0):
     """A node:test JUnit report as a TestResult."""
     total = passed = failed = skipped = 0
@@ -122,14 +133,18 @@ def junit_result(xml, root, output="", duration_ms=0):
                     skipped += 1
                 elif problem is not None:
                     failed += 1
-                    path = child.get("file", "")
                     body = ANSI.sub("", problem.text or "").strip()
                     reason = problem.get("message") or body.split("\n")[0]
+                    # Node before 24 names no file on a test case.
+                    path = child.get("file", "")
+                    line = int(child.get("line") or 0) or _line_in(body, path)
+                    if not path:
+                        path, line = _stack_location(body)
                     failures.append(
                         TestFailure(
                             " › ".join([*titles, child.get("name", "")]),
                             _relative(path, root),
-                            int(child.get("line") or 0) or _line_in(body, path),
+                            line,
                             reason + ("\n" + body if body and body != reason else ""),
                         )
                     )

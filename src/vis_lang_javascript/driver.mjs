@@ -78,7 +78,10 @@ function evaluate(code) {
       current = null;
       resolve({ ok: !res.exc && !res.syntax, out: out.join(''), ...res });
     };
-    current = { abandon: () => finish({ exc: 'Interrupted: the evaluation was abandoned. A promise it started can still run.' }) };
+    current = {
+      abandon: () => finish({ exc: 'Interrupted: the evaluation was abandoned. A promise it started can still run.' }),
+      fail: (err) => finish({ exc: errorText(err) }),
+    };
     const ready = compiled(code);
     if (ready.syntax) return finish({ syntax: ready.syntax });
     const guard = domain.create();
@@ -109,16 +112,26 @@ function onInterrupt() {
 }
 process.on('SIGINT', onInterrupt);
 process.on('uncaughtException', (err) => rawErr('uncaught: ' + errorText(err) + '\n'));
+// Before Node 25, the REPL binds its eval to a domain of its own, and an error
+// of the code reaches that domain instead of the eval's callback.
+server._domain?.on('error', (err) => {
+  if (current) current.fail(err);
+  else rawErr('uncaught: ' + errorText(err) + '\n');
+});
 process.on('unhandledRejection', (err) => rawErr('unhandled rejection: ' + errorText(err) + '\n'));
 
 // One byte on the interrupt FIFO asks to stop the running eval. A worker reads
 // it, because the main thread can be held by the code itself.
 const stop = process.env.VIS_LANG_RENDEZVOUS && path.join(process.env.VIS_LANG_RENDEZVOUS, 'interrupt');
 if (stop && fs.existsSync(stop)) {
+  // The FIFO is open before the startup ping is answered, so an interrupt
+  // that comes right after the start finds a reader.
+  const fd = fs.openSync(stop, 'r+');
   const watcher = new Worker(
-    `const fs = process.getBuiltinModule('node:fs'); const fd = fs.openSync(${JSON.stringify(stop)}, 'r+'); const b = Buffer.alloc(64);
-     for (;;) { if (fs.readSync(fd, b) > 0) process.kill(process.pid, 'SIGINT'); }`,
-    { eval: true },
+    `const fs = process.getBuiltinModule('node:fs'); const { workerData } = process.getBuiltinModule('node:worker_threads');
+     const b = Buffer.alloc(64);
+     for (;;) { if (fs.readSync(workerData, b) > 0) process.kill(process.pid, 'SIGINT'); }`,
+    { eval: true, workerData: fd },
   );
   watcher.unref();
 }
