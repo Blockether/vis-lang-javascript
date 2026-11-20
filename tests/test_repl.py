@@ -1,4 +1,4 @@
-"""The managed Node REPL keeps its state and never leaves a child behind."""
+"""The managed REPL keeps its state and never leaves a child behind, on Node and Bun."""
 
 import pytest
 
@@ -8,8 +8,11 @@ from vis_lang_javascript.tools import JavaScriptTools
 
 
 @pytest.fixture
-def project(tmp_path):
+def project(tmp_path, runtime):
     (tmp_path / "package.json").write_text('{"name": "p", "type": "module"}')
+    if runtime == "bun":
+        # "auto" picks Bun for a project with a Bun lockfile.
+        (tmp_path / "bun.lock").write_text("{}")
     tools = JavaScriptTools()
     yield tools, str(tmp_path)
     tools.repl_stop(cwd=str(tmp_path))
@@ -45,16 +48,29 @@ def test_project_modules_load_from_the_directory(project, tmp_path):
     assert tools.repl_eval("twice(21)", cwd=cwd).value == "42"
 
 
-def test_output_and_errors_come_back(project):
+def test_the_project_runtime_starts(project, runtime):
+    tools, cwd = project
+    detail = tools.repl_start(cwd=cwd).detail
+    assert detail.startswith(f"started · {runtime.capitalize()} ")
+    assert tools.repl_status(cwd=cwd).detail.startswith(
+        f"running · {runtime.capitalize()} "
+    )
+
+
+def test_output_and_errors_come_back(project, runtime):
     tools, cwd = project
     tools.repl_start(cwd=cwd)
     printed = tools.repl_eval("console.log('hello'); console.error('warn')", cwd=cwd)
     assert printed.output == "hello\nwarn\n"
     failed = tools.repl_eval("throw new TypeError('boom')", cwd=cwd)
-    assert failed.error == "TypeError: boom\n    at REPL:1:7"
+    # Bun's positions are in the transpiled code, so they are left out.
+    where = "REPL:1:7" if runtime == "node" else "REPL"
+    assert failed.error == f"TypeError: boom\n    at {where}"
 
 
-def test_an_error_keeps_the_frames_of_the_code_and_drops_the_driver(project, tmp_path):
+def test_an_error_keeps_the_frames_of_the_code_and_drops_the_driver(
+    project, tmp_path, runtime
+):
     tools, cwd = project
     (tmp_path / "lib.mjs").write_text(
         "export const fail = () => [1].map(() => { throw new Error('deep') });\n"
@@ -64,8 +80,12 @@ def test_an_error_keeps_the_frames_of_the_code_and_drops_the_driver(project, tmp
     frames = tools.repl_eval("fail()", cwd=cwd).error.splitlines()
     assert frames[0] == "Error: deep"
     assert "lib.mjs:1:" in frames[1]
-    assert "Array.map (<anonymous>)" in frames[2]
-    assert frames[-1] == "    at REPL:1:1"
+    if runtime == "node":
+        assert "Array.map (<anonymous>)" in frames[2]
+        assert frames[-1] == "    at REPL:1:1"
+    else:
+        assert frames[2] == "    at map (native:1:11)"
+        assert frames[-1] == "    at REPL"
 
 
 def test_code_that_does_not_parse_runs_none_of_its_statements(project):
@@ -97,7 +117,7 @@ def test_a_second_start_keeps_the_live_repl(project):
     tools, cwd = project
     tools.repl_start(cwd=cwd)
     tools.repl_eval("const kept = 7", cwd=cwd)
-    assert tools.repl_start(cwd=cwd).detail == "already running"
+    assert tools.repl_start(cwd=cwd).detail.startswith("already running · ")
     assert tools.repl_eval("kept", cwd=cwd).value == "7"
 
 
@@ -107,7 +127,7 @@ def test_a_new_python_process_attaches_to_the_kept_repl(project):
     tools.repl_eval("const kept = 9", cwd=cwd)
     # A sandbox restart ends the Python process; the runtime stays.
     repl.detach_all()
-    assert tools.repl_status(cwd=cwd).detail == "running"
+    assert tools.repl_status(cwd=cwd).detail.startswith("running · ")
     assert tools.repl_eval("kept", cwd=cwd).value == "9"
 
 
@@ -116,5 +136,33 @@ def test_stop_ends_the_repl(project):
     tools.repl_start(cwd=cwd)
     assert tools.repl_stop(cwd=cwd).detail == "stopped"
     assert tools.repl_status(cwd=cwd).is_running is False
-    with pytest.raises(ReplError, match="not up"):
+    with pytest.raises(ReplError, match="No REPL is up"):
         tools.repl_eval("1", cwd=cwd)
+
+
+def test_a_live_repl_on_another_named_runtime_is_refused(tmp_path, node, bun):
+    tools, cwd = JavaScriptTools(), str(tmp_path)
+    try:
+        tools.repl_start(cwd=cwd, runtime="bun")
+        tools.repl_eval("const kept = 1", cwd=cwd)
+        with pytest.raises(RuntimeError, match="already runs on Bun"):
+            tools.repl_start(cwd=cwd, runtime="node")
+        assert tools.repl_start(cwd=cwd).detail.startswith("already running · Bun")
+        assert tools.repl_eval("kept", cwd=cwd).value == "1"
+    finally:
+        tools.repl_stop(cwd=cwd)
+
+
+def test_bun_runs_a_static_import_and_a_declaration_again(project, runtime, tmp_path):
+    if runtime != "bun":
+        pytest.skip("Node refuses a static import")
+    tools, cwd = project
+    (tmp_path / "lib.ts").write_text("export const twice = (n: number) => n * 2;\n")
+    tools.repl_start(cwd=cwd)
+    tools.repl_eval("import { twice } from './lib.ts'", cwd=cwd)
+    tools.repl_eval("const n = 1", cwd=cwd)
+    tools.repl_eval("const n = 20", cwd=cwd)
+    assert (
+        tools.repl_eval("twice(n) + require('node:path').sep.length", cwd=cwd).value
+        == "41"
+    )

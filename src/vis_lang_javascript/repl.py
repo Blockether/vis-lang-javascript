@@ -1,7 +1,7 @@
-"""The managed Node.js REPL this extension owns.
+"""The managed JavaScript REPL this extension owns, on Node.js or Bun.
 
 `js.repl_start`, `js.repl_status`, `js.repl_stop` and `js.repl_eval` reach this
-module. The REPL is one `node` process for each project directory. It runs
+module. The REPL is one `node` or `bun` process for each project directory. It runs
 `driver.mjs`, a small line-framed eval server: one JSON request goes in per
 line, and one JSON answer comes out per line. Declarations live between
 evaluations, and TypeScript loses its types before it runs.
@@ -27,6 +27,8 @@ from pathlib import Path
 from vis_lang_interface import RuntimeGone, runtime
 from vis_lang_interface.process import shell_call
 
+from vis_lang_javascript import runtimes
+
 DRIVER = (Path(__file__).parent / "driver.mjs").read_text(encoding="utf-8")
 
 LOADER = (
@@ -36,16 +38,11 @@ LOADER = (
 """Runs the driver from the runtime's rendezvous. The command line stays the same
 for every start in one directory, so a later process finds the runtime by it."""
 
-COMMAND = (
-    "node",
-    "--disable-warning=ExperimentalWarning",
-    "--input-type=module",
-    "-e",
-    LOADER,
-)
 
-MINIMUM_NODE = (22, 18)
-"""Node 22.18 strips TypeScript types by default, also in the files it imports."""
+def command(runtime):
+    """The argv that runs the driver on `runtime`, a `runtimes.Runtime`."""
+    return (runtime.name, *runtime.eval_flags, "-e", LOADER)
+
 
 STARTUP_TIMEOUT_S = 20.0
 DEFAULT_EVAL_TIMEOUT_S = 30.0
@@ -64,13 +61,15 @@ class ReplError(RuntimeError):
 
 
 class _Repl:
-    """One node runtime and the framed conversation with it."""
+    """One node or bun process and the framed conversation with it."""
 
-    def __init__(self, live, cwd, env_fingerprint, place):
+    def __init__(self, live, cwd, env_fingerprint, place, runtime):
         self.live = live
         self.cwd = cwd
         self.env_fingerprint = dict(env_fingerprint or {})
         self.place = place
+        self.runtime = runtime
+        self.version = ""
         self.stuck = False
         # A kept runtime can still hold answers to an earlier process's calls,
         # so every id carries a prefix of this object's own.
@@ -95,7 +94,7 @@ class _Repl:
         except RuntimeGone as ex:
             self.kill()
             raise ReplError(
-                "Node REPL closed the connection; start it again with "
+                f"{self.runtime.label} REPL closed the connection; start it again with "
                 f"js.repl_start(). ({ex})"
             ) from ex
 
@@ -112,6 +111,7 @@ class _Repl:
             return False
         finally:
             self.lock.release()
+        self.version = str(pong.get("version") or self.version)
         is_idle = pong.get("pong") is True
         if is_idle:
             self.stuck = False
@@ -150,7 +150,7 @@ class _Repl:
 
     def timed_out(self, timeout_s):
         """Interrupt the code of a timed-out eval, and say whether it stopped."""
-        said = f"Node eval timed out after {int(timeout_s * 1000)}ms"
+        said = f"{self.runtime.label} eval timed out after {int(timeout_s * 1000)}ms"
         if self.interrupt() and self.settles(INTERRUPT_GRACE_S):
             return (
                 f"{said}. The code was interrupted. The REPL answers again, and the"
@@ -187,7 +187,7 @@ def _project_dir(options):
 
 
 def _displayed(cmd):
-    return [*cmd[:-2], "<vis node driver>"]
+    return [*cmd[:-2], f"<vis {cmd[0]} driver>"]
 
 
 def _kept_directory(command):
@@ -212,14 +212,24 @@ def _kept(cwd):
         shell = shell_call()({"op": "logs", "id": sid, "offset": -1})
     except Exception:
         return None
-    command = str(shell.get("command") or "")
-    if str(shell.get("status")) != "running" or shlex.join(COMMAND) not in command:
+    line = str(shell.get("command") or "")
+    if str(shell.get("status")) != "running":
         return None
-    place = _kept_directory(command)
+    kind = next(
+        (
+            known
+            for known in runtimes.RUNTIMES.values()
+            if shlex.join(command(known)) in line
+        ),
+        None,
+    )
+    if kind is None:
+        return None
+    place = _kept_directory(line)
     if not place or not os.path.isfile(os.path.join(place, "driver.mjs")):
         return None
     try:
-        live = runtime.start(list(COMMAND), cwd=cwd, shell_id=sid)
+        live = runtime.start(list(command(kind)), cwd=cwd, shell_id=sid)
     except Exception:
         return None
     if live.pid != shell.get("pid"):
@@ -230,7 +240,7 @@ def _kept(cwd):
             fingerprint = json.load(handle)
     except (OSError, ValueError):
         fingerprint = {}
-    kept = _Repl(live, cwd, fingerprint, place)
+    kept = _Repl(live, cwd, fingerprint, place, kind)
     # An earlier process may have left code running in it.
     kept.stuck = True
     return kept
@@ -253,7 +263,10 @@ def _status(cwd, repl):
     answer = {"result": "status", "cwd": cwd, "status": "up" if repl else "down"}
     if repl:
         answer["pid"] = repl.pid
-        answer["cmd"] = _displayed(list(COMMAND))
+        answer["cmd"] = _displayed(list(command(repl.runtime)))
+        answer["runtime"] = repl.runtime.name
+        if repl.version:
+            answer["version"] = repl.version
         if repl.env_fingerprint:
             answer["env"] = dict(repl.env_fingerprint)
     return answer
@@ -262,8 +275,10 @@ def _status(cwd, repl):
 def status(options=None):
     cwd = _project_dir(options)
     repl = _live(cwd)
+    # The ping also tells a kept REPL its version.
+    is_busy = repl is not None and not repl.answers(ANSWER_CHECK_S)
     answer = _status(cwd, repl)
-    if repl is not None and not repl.answers(ANSWER_CHECK_S):
+    if is_busy:
         answer["busy"] = True
         answer["message"] = BUSY
     return answer
@@ -271,23 +286,35 @@ def status(options=None):
 
 def _version(text):
     try:
-        return tuple(int(part) for part in str(text).split(".")[:2])
+        return tuple(int(part) for part in str(text).split(".")[:3])
     except ValueError:
         return (0, 0)
 
 
 def start(options=None):
-    """Start the Node REPL for `cwd`, or keep the live one.
+    """Start the REPL for `cwd` on `runtime` ("auto", "node" or "bun"), or keep
+    the live one.
 
-    A live REPL is never replaced, because its state is the work. A start
-    succeeds only after the driver answers its ping on a Node that is new enough.
+    A live REPL is never replaced, because its state is the work: with "auto"
+    it is kept on whichever runtime it runs, and another runtime asked for by
+    name is refused. A start succeeds only after the driver answers its ping on
+    a runtime that is new enough.
     """
     options = options or {}
     cwd = _project_dir(options)
+    wanted_runtime = options.get("runtime") or "auto"
     with _REPLS_LOCK:
         live = _live(cwd)
         if live:
             answer = _status(cwd, live)
+            if wanted_runtime not in ("auto", live.runtime.name):
+                answer["result"] = "failed"
+                answer["message"] = (
+                    f"The REPL for {abbreviate_home(cwd)} already runs on"
+                    f" {live.runtime.label}. Call js.repl_stop(), then start it on"
+                    f" {runtimes.label(wanted_runtime)}."
+                )
+                return answer
             wanted = dict(options.get("env_fingerprint") or {})
             differing = sorted(
                 name
@@ -297,14 +324,15 @@ def start(options=None):
             if differing:
                 answer["result"] = "failed"
                 answer["message"] = (
-                    f"The Node REPL for {abbreviate_home(cwd)} already runs with a"
+                    f"The {live.runtime.label} REPL for {abbreviate_home(cwd)} already runs with a"
                     f" different env ({', '.join(differing)}). Call js.repl_stop(),"
                     " then start it with this env."
                 )
             else:
                 answer["result"] = "already-running"
             return answer
-        meeting = runtime.Rendezvous("node").open()
+        chosen = runtimes.choose(cwd, wanted_runtime)
+        meeting = runtime.Rendezvous(chosen.name).open()
         try:
             meeting.place("driver.mjs", DRIVER)
             meeting.place(
@@ -312,7 +340,7 @@ def start(options=None):
             )
             os.mkfifo(os.path.join(meeting.path, "interrupt"))
             live = runtime.start(
-                list(COMMAND),
+                list(command(chosen)),
                 cwd=cwd,
                 env={k: v for k, v in (options.get("env") or {}).items()},
                 meeting=meeting,
@@ -321,34 +349,38 @@ def start(options=None):
         except BaseException:
             meeting.close()
             raise
-        repl = _Repl(live, cwd, options.get("env_fingerprint"), meeting.path)
+        repl = _Repl(live, cwd, options.get("env_fingerprint"), meeting.path, chosen)
         try:
             pong = repl.live.request(
                 {"op": "ping", "id": "start"}, STARTUP_TIMEOUT_S, wants="start"
             )
-            node = str(pong.get("node") or "")
-            if _version(node) < MINIMUM_NODE:
+            repl.version = str(pong.get("version") or "")
+            if pong.get("runtime") != chosen.name:
+                # For example the `node` that the oven/bun image links to bun.
                 raise ReplError(
-                    f"Node {node} is too old: the REPL needs Node"
-                    f" {'.'.join(map(str, MINIMUM_NODE))} or newer"
+                    f"the `{chosen.name}` on PATH runs {pong.get('runtime') or 'an unknown runtime'}"
+                )
+            if _version(repl.version) < chosen.minimum:
+                raise ReplError(
+                    f"{chosen.label} {repl.version} is too old: the REPL needs"
+                    f" {chosen.label} {'.'.join(map(str, chosen.minimum))} or newer"
                 )
         except BaseException as ex:
             tail = repl.live.log_tail(STDERR_TAIL_LINES)
             repl.kill()
             if not isinstance(ex, Exception):
                 raise
-            message = f"Node REPL failed its startup handshake: {ex}"
+            message = f"{chosen.label} REPL failed its startup handshake: {ex}"
             return {
                 "result": "failed",
                 "status": "failed",
                 "cwd": cwd,
-                "cmd": _displayed(list(COMMAND)),
+                "cmd": _displayed(list(command(chosen))),
                 "message": message + ("\n" + "\n".join(tail) if tail else ""),
             }
         _REPLS[cwd] = repl
         answer = _status(cwd, repl)
         answer["result"] = "started"
-        answer["node"] = node
         return answer
 
 
@@ -375,7 +407,7 @@ def evaluate(options):
     if repl is None:
         shown = abbreviate_home(cwd)
         raise ReplError(
-            f'Node REPL is not up for {shown}; call js.repl_start(cwd="{shown}") first'
+            f'No REPL is up for {shown}; call js.repl_start(cwd="{shown}") first'
         )
     timeout_ms = options.get("timeout_ms")
     timeout_s = float(timeout_ms) / 1000.0 if timeout_ms else DEFAULT_EVAL_TIMEOUT_S

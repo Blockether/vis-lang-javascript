@@ -40,27 +40,29 @@ _bind(
 )
 _bind(
     "repl_start",
-    "Start Node REPL",
-    lambda result: presentation.session_presentation("Start Node REPL", result),
+    "Start JavaScript REPL",
+    lambda result: presentation.session_presentation("Start JavaScript REPL", result),
     tag="mutation",
 )
 _bind(
     "repl_status",
-    "Check Node REPL",
-    lambda result: presentation.session_presentation("Check Node REPL", result),
+    "Check JavaScript REPL",
+    lambda result: presentation.session_presentation("Check JavaScript REPL", result),
     show_start=False,
 )
 _bind(
     "repl_stop",
-    "Stop Node REPL",
-    lambda result: presentation.session_presentation("Stop Node REPL", result),
+    "Stop JavaScript REPL",
+    lambda result: presentation.session_presentation("Stop JavaScript REPL", result),
     tag="mutation",
     show_start=False,
 )
 _bind(
     "repl_eval",
-    "Evaluate in Node REPL",
-    lambda result: presentation.repl_presentation("Evaluate in Node REPL", result),
+    "Evaluate in JavaScript REPL",
+    lambda result: presentation.repl_presentation(
+        "Evaluate in JavaScript REPL", result
+    ),
     tag="mutation",
     describe=presentation.code_argument("javascript"),
 )
@@ -70,31 +72,34 @@ PROMPT = prompt.routing(
     "js",
     ("run_tests", "repl_start", "repl_status", "repl_eval", "repl_stop"),
     notes=(
-        "`js.repl_eval` runs JavaScript or TypeScript in one Node process for each project"
-        " directory: types are stripped, declarations stay and top-level await works. Load"
-        " modules with `require()` or `await import()`, not a static `import`.",
-        "`js.run_tests` runs Vitest or Jest when package.json declares it, else node:test.",
+        "`js.repl_eval` runs JavaScript or TypeScript in one Node or Bun process for each"
+        " project directory: types are stripped, declarations stay and top-level await works."
+        " Load modules with `require()` or `await import()`; a static `import` works on Bun only.",
+        '`runtime="auto"` picks Bun when the project has bun.lock, bun.lockb or'
+        ' `"packageManager": "bun@..."`, else Node; pass "node" or "bun" to choose.',
+        "`js.run_tests` runs Vitest or Jest when package.json declares it, else bun test on"
+        " Bun or node:test on Node.",
     ),
     tools=JavaScriptTools,
 )
 
 
-def _node_home():
-    """The installation that the `node` on PATH belongs to, or None."""
-    found = shutil.which("node")
+def _home(program):
+    """The installation that `program` on PATH belongs to, or None."""
+    found = shutil.which(program)
     return Path(os.path.realpath(found)).parents[1] if found else None
 
 
 GRANTS = [
-    vis.Grant(home, reason="Run Node.js for REPLs and tests.")
-    for home in [_node_home()]
+    vis.Grant(home, reason=f"Run {label} for REPLs and tests.")
+    for home, label in [(_home("node"), "Node.js"), (_home("bun"), "Bun")]
     if home is not None
 ]
 
 vis.register_extension(
     vis.Extension(
         name="vis-lang-javascript",
-        description="JavaScript and TypeScript tools on Node.js: test runs and a managed REPL.",
+        description="JavaScript and TypeScript tools on Node.js and Bun: test runs and a managed REPL.",
         version="0.1.1",
         alias="js",
         symbols=[

@@ -1,6 +1,8 @@
-"""Test runs: node:test, Jest and Vitest, counted from the report each one writes.
+"""Test runs: node:test, bun test, Jest and Vitest, counted from the report each
+one writes.
 
-node:test writes JUnit XML. Jest and Vitest write the same JSON report shape.
+node:test and bun test write JUnit XML. Jest and Vitest write the same JSON
+report shape.
 """
 
 from __future__ import annotations
@@ -10,17 +12,26 @@ import re
 import shutil
 import time
 import xml.etree.ElementTree as ElementTree
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from vis_lang_interface import TestFailure, TestResult, ToolMissing, process
+
+from vis_lang_javascript import runtimes
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 OUTPUT_TAIL = 20000
 NODE_TEST_FILES = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}"
 
 
-def runner(root):
-    """The runner the project declares: vitest, then jest, else node:test."""
+DECLARED = ("vitest", "jest")
+"""The runners that package.json can declare, in the order they win."""
+
+
+def runner(root, runtime="auto"):
+    """The runner the project declares: vitest, then jest, else the built-in
+    runner of the runtime, bun or node."""
     try:
         manifest = json.loads((Path(root) / "package.json").read_text("utf-8"))
     except (OSError, ValueError):
@@ -29,10 +40,10 @@ def runner(root):
         **(manifest.get("devDependencies") or {}),
         **(manifest.get("dependencies") or {}),
     }
-    for name in ("vitest", "jest"):
+    for name in DECLARED:
         if name in declared:
             return name
-    return "node"
+    return runtimes.choose(root, runtime).name
 
 
 def binary(root, name):
@@ -58,30 +69,51 @@ def _node_paths(root, paths):
     return named
 
 
-def command(name, root, paths, report, *, keyword="", max_failures=0):
-    """The argv of one run that writes its report to `report`."""
-    if name == "node":
-        argv = [
-            "node",
-            "--test",
-            "--test-reporter=spec",
-            "--test-reporter-destination=stdout",
-            "--test-reporter=junit",
-            f"--test-reporter-destination={report}",
-        ]
-        if keyword:
-            argv.append(f"--test-name-pattern={keyword}")
-        return argv + _node_paths(root, paths)
-    if name == "jest":
-        argv = [binary(root, "jest"), "--ci", "--json", f"--outputFile={report}"]
-        argv.append("--testLocationInResults")
-        if max_failures:
-            argv.append(f"--bail={max_failures}")
-    else:
-        argv = [binary(root, "vitest"), "run", "--reporter=default"]
-        argv += ["--reporter=json", f"--outputFile.json={report}"]
-        if max_failures:
-            argv.append(f"--bail={max_failures}")
+def _node_argv(root, paths, report, keyword, max_failures):
+    """node:test has no failure limit, so it runs every test."""
+    argv = [
+        "node",
+        "--test",
+        "--test-reporter=spec",
+        "--test-reporter-destination=stdout",
+        "--test-reporter=junit",
+        f"--test-reporter-destination={report}",
+    ]
+    if keyword:
+        argv.append(f"--test-name-pattern={keyword}")
+    return argv + _node_paths(root, paths)
+
+
+def _bun_argv(root, paths, report, keyword, max_failures):
+    argv = ["bun", "test", "--reporter=junit", f"--reporter-outfile={report}"]
+    if max_failures:
+        argv.append(f"--bail={max_failures}")
+    if keyword:
+        argv += ["-t", keyword]
+    # bun test reads a bare word as a filter on file names, not a path.
+    return argv + [
+        str(path)
+        if Path(path).is_absolute() or str(path).startswith(".")
+        else f"./{path}"
+        for path in paths
+    ]
+
+
+def _jest_argv(root, paths, report, keyword, max_failures):
+    argv = [binary(root, "jest"), "--ci", "--json", f"--outputFile={report}"]
+    argv.append("--testLocationInResults")
+    if max_failures:
+        argv.append(f"--bail={max_failures}")
+    if keyword:
+        argv += ["-t", keyword]
+    return argv + [str(path) for path in paths]
+
+
+def _vitest_argv(root, paths, report, keyword, max_failures):
+    argv = [binary(root, "vitest"), "run", "--reporter=default"]
+    argv += ["--reporter=json", f"--outputFile.json={report}"]
+    if max_failures:
+        argv.append(f"--bail={max_failures}")
     if keyword:
         argv += ["-t", keyword]
     return argv + [str(path) for path in paths]
@@ -114,8 +146,32 @@ def _stack_location(text):
     return "", 0
 
 
-def junit_result(xml, root, output="", duration_ms=0):
-    """A node:test JUnit report as a TestResult."""
+# Under GitHub Actions, bun test opens each file's output with `::group::`.
+UNLOADED = re.compile(
+    r"^(?:::group::)?(?P<file>\S[^\n]*):\n\n# Unhandled error between tests\n-+\n(?P<message>.*?)\n-+$",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _unloaded(output, root):
+    """The files that bun test names in its output as failed to load.
+
+    Bun leaves such a file out of its JUnit report.
+    """
+    return [
+        TestFailure(
+            Path(found["file"]).name,
+            _relative(Path(root) / found["file"], root),
+            0,
+            found["message"].strip(),
+        )
+        for found in UNLOADED.finditer(output or "")
+    ]
+
+
+def junit_result(xml, root, output="", duration_ms=0, *, unloaded=()):
+    """A node:test or bun test JUnit report as a TestResult, with the files in
+    `unloaded` counted as one failure each."""
     total = passed = failed = skipped = 0
     failures = []
 
@@ -123,7 +179,9 @@ def junit_result(xml, root, output="", duration_ms=0):
         nonlocal total, passed, failed, skipped
         for child in node:
             if child.tag == "testsuite":
-                walk(child, [*titles, child.get("name", "")])
+                # bun test wraps each file in a suite named after the file.
+                name = child.get("name", "")
+                walk(child, titles if name == child.get("file") else [*titles, name])
             elif child.tag == "testcase":
                 total += 1
                 problem = child.find("failure")
@@ -134,10 +192,12 @@ def junit_result(xml, root, output="", duration_ms=0):
                 elif problem is not None:
                     failed += 1
                     body = ANSI.sub("", problem.text or "").strip()
-                    reason = problem.get("message") or body.split("\n")[0]
-                    # Node before 24 names no file on a test case.
+                    reason = ANSI.sub("", problem.get("message") or "").strip()
+                    reason = reason or body.split("\n")[0]
+                    # Node before 24 names no file on a test case. Bun's line
+                    # is the test's own; the stack names the failing line.
                     path = child.get("file", "")
-                    line = int(child.get("line") or 0) or _line_in(body, path)
+                    line = _line_in(body, path) or int(child.get("line") or 0)
                     if not path:
                         path, line = _stack_location(body)
                     failures.append(
@@ -152,6 +212,9 @@ def junit_result(xml, root, output="", duration_ms=0):
                     passed += 1
 
     walk(ElementTree.fromstring(xml), [])
+    failures += unloaded
+    total += len(unloaded)
+    failed += len(unloaded)
     return TestResult.of(
         "javascript",
         total=total,
@@ -217,19 +280,54 @@ def json_result(report, root, output="", duration_ms=0):
     )
 
 
-def run(paths, *, root, keyword="", max_failures=0, timeout_s=900):
+def _none_unloaded(output, root):
+    return []
+
+
+@dataclass(frozen=True)
+class Runner:
+    """One test runner: the argv of a run and the report that the run writes."""
+
+    name: str
+    report: str
+    """ "junit" or "json"."""
+    argv: Callable[..., list[str]]
+    """(root, paths, report, keyword, max_failures) -> argv"""
+    unloaded: Callable[..., list[TestFailure]] = _none_unloaded
+    """(output, root) -> the files that failed to load and that the report omits."""
+
+
+RUNNERS = {
+    known.name: known
+    for known in (
+        Runner("vitest", "json", _vitest_argv),
+        Runner("jest", "json", _jest_argv),
+        Runner("node", "junit", _node_argv),
+        Runner("bun", "junit", _bun_argv, _unloaded),
+    )
+}
+
+
+def run(paths, *, root, keyword="", max_failures=0, timeout_s=900, runtime="auto"):
     """Run the project's test runner in `root` and count its report."""
-    name = runner(root)
+    chosen = RUNNERS[runner(root, runtime)]
+    name = chosen.name
     work = process.run_directory("javascript-tests")
     try:
-        report = work / ("report.xml" if name == "node" else "report.json")
-        argv = command(
-            name, root, paths, report, keyword=keyword, max_failures=max_failures
-        )
+        is_junit = chosen.report == "junit"
+        report = work / ("report.xml" if is_junit else "report.json")
+        argv = chosen.argv(root, paths, report, keyword, max_failures)
         started = time.monotonic()
         ran = process.run(argv, cwd=root, timeout_s=timeout_s, read_write=[work])
         duration_ms = round((time.monotonic() - started) * 1000)
-        output = ANSI.sub("", (ran.out or "") + (ran.err or ""))[-OUTPUT_TAIL:]
+        printed = ANSI.sub("", (ran.out or "") + (ran.err or ""))
+        output = printed[-OUTPUT_TAIL:]
+        unloaded = chosen.unloaded(printed, root)
+        if not report.is_file() and unloaded:
+            # bun test writes no report when no file loads.
+            return junit_result(
+                "<testsuites/>", root, output, duration_ms, unloaded=unloaded
+            )
         if not report.is_file():
             return TestResult.of(
                 "javascript",
@@ -250,8 +348,8 @@ def run(paths, *, root, keyword="", max_failures=0, timeout_s=900):
                 output=output,
             )
         text = report.read_text("utf-8")
-        if name == "node":
-            return junit_result(text, root, output, duration_ms)
+        if is_junit:
+            return junit_result(text, root, output, duration_ms, unloaded=unloaded)
         return json_result(json.loads(text), root, output, duration_ms)
     finally:
         shutil.rmtree(work, ignore_errors=True)
