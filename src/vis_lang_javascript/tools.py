@@ -204,8 +204,10 @@ class JavaScriptTools:
     ) -> ReplResult:
         """Evaluate code in the live REPL, keeping declarations between calls.
 
-        TypeScript types are stripped before the code runs; enums and namespaces
-        are transformed. Top-level await works. Use require() or await import()
+        TypeScript types are stripped before the code runs. Node 26 and later
+        cannot transform enums, namespaces with runtime code, or parameter
+        properties. Use Node 24 or Bun, or compile the code first.
+        Top-level await works. Use require() or await import()
         for modules; on Node a static import statement is refused. On Bun a
         static import works, a const can be declared again, and a declaration
         answers its value. The value of the last

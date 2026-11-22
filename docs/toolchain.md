@@ -62,7 +62,9 @@ file. A live REPL with other variables is refused.
 
 ### Evaluation
 
-- TypeScript types are stripped before the code runs. Enums and namespaces are transformed.
+- TypeScript types are stripped before the code runs. On Node 26 and later, syntax that needs
+  a transform, such as enums, namespaces with runtime code, and parameter properties, gives an
+  error. Use Node 24 or Bun, or compile the code to JavaScript first.
 - Declarations stay between calls, and top-level `await` works.
 - Load modules with `require()` or `await import()`. On Node, a static `import` statement is
   refused.

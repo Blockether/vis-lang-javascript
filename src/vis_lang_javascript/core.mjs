@@ -72,6 +72,10 @@ function compiled(code) {
       try {
         return { code: module.stripTypeScriptTypes(code, { mode: 'transform' }) };
       } catch (again) {
+        if (again?.code === 'ERR_INVALID_ARG_VALUE') {
+          return { syntax: `Node ${process.version} removed TypeScript transform mode. ` +
+            'This code needs a transform. Use Node 24 or Bun, or compile the code to JavaScript first.' };
+        }
         err = again;
       }
     }

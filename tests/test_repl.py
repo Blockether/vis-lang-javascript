@@ -40,7 +40,30 @@ def test_typescript_runs_after_its_types_are_stripped(project):
     tools, cwd = project
     tools.repl_start(cwd=cwd)
     tools.repl_eval("const n: number = await Promise.resolve(3)", cwd=cwd)
-    assert tools.repl_eval("enum E { A, B }\nE.B + n", cwd=cwd).value == "4"
+    assert tools.repl_eval("n", cwd=cwd).value == "3"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "enum E { A, B }\nE.B + 3",
+        "namespace N { export const x = 4 }\nN.x",
+        "class C { constructor(public x: number) {} }\nnew C(4).x",
+    ],
+)
+def test_typescript_that_needs_a_transform(project, runtime, code):
+    tools, cwd = project
+    tools.repl_start(cwd=cwd)
+    major = int(tools.repl_eval("parseInt(process.versions.node)", cwd=cwd).value)
+    answer = tools.repl_eval(code, cwd=cwd)
+    if runtime == "node" and major >= 26:
+        assert "Node" in answer.error
+        assert "removed TypeScript transform mode" in answer.error
+        assert "Node 24" in answer.error
+        assert "Bun" in answer.error
+        assert tools.repl_eval("1 + 1", cwd=cwd).value == "2"
+    else:
+        assert (answer.value, answer.error) == ("4", "")
 
 
 def test_project_modules_load_from_the_directory(project, tmp_path):
@@ -134,6 +157,21 @@ def test_a_new_python_process_attaches_to_the_kept_repl(project):
     repl.detach_all()
     assert tools.repl_status(cwd=cwd).detail.startswith("running · ")
     assert tools.repl_eval("kept", cwd=cwd).value == "9"
+
+
+@pytest.mark.parametrize("launch", ["pinned", "legacy", "unknown"])
+def test_kept_command_reads_the_shared_runtime_shell_line(tmp_path, launch):
+    place = tmp_path / "repl with spaces"
+    req = shlex.quote(str(place / "requests"))
+    ans = shlex.quote(str(place / "answers"))
+    argv = list(repl.command(runtimes.NODE))
+    if launch == "pinned":
+        argv[0] = str(tmp_path / "nvm with spaces/versions/node/v24.22.1/bin/node")
+    if launch == "unknown":
+        argv[-1] = "console.log('not a Vis REPL')"
+    line = f"exec {shlex.join(argv)} 3<>{req} 4<>{ans} <{req} >{ans}"
+    expected = None if launch == "unknown" else (runtimes.NODE, argv, str(place))
+    assert repl._kept_command(line) == expected
 
 
 def test_stop_ends_the_repl(project):
