@@ -7,6 +7,7 @@ from pathlib import Path
 import blockether.vis.extension as vis
 from vis_lang_interface import presentation, prompt
 
+from vis_lang_javascript.runtimes import nvm_directory
 from vis_lang_javascript.tools import JavaScriptTools
 
 
@@ -77,6 +78,9 @@ PROMPT = prompt.routing(
         " Load modules with `require()` or `await import()`; a static `import` works on Bun only.",
         '`runtime="auto"` picks Bun when the project has bun.lock, bun.lockb or'
         ' `"packageManager": "bun@..."`, else Node; pass "node" or "bun" to choose.',
+        "For Node, the nearest .nvmrc, or .node-version if there is no .nvmrc, selects an"
+        " installed nvm version. With no version file, use Node on PATH or the nvm default."
+        " A live REPL keeps its Node version until you stop it.",
         "`js.run_tests` runs Vitest or Jest when package.json declares it, else bun test on"
         " Bun or node:test on Node.",
         '`js.repl_start(nest="auto")` loads a built NestJS app without listening or init:'
@@ -95,15 +99,19 @@ def _home(program):
 
 GRANTS = [
     vis.Grant(home, reason=f"Run {label} for REPLs and tests.")
-    for home, label in [(_home("node"), "Node.js"), (_home("bun"), "Bun")]
-    if home is not None
+    for home, label in [
+        (_home("node"), "Node.js"),
+        (_home("bun"), "Bun"),
+        (nvm_directory() / "versions" / "node", "Node.js from nvm"),
+    ]
+    if home is not None and home.is_dir()
 ]
 
 vis.register_extension(
     vis.Extension(
         name="vis-lang-javascript",
         description="JavaScript and TypeScript tools on Node.js and Bun: test runs and a managed REPL.",
-        version="0.2.1",
+        version="0.2.2",
         alias="js",
         symbols=[
             vis.Symbol(JavaScriptTools(workspace_root=vis.workspace_root), name="js")

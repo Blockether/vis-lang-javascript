@@ -10,9 +10,11 @@ project's runtime: Bun when the project has a Bun lockfile or `"packageManager":
 vis-agent extension install blockether/vis-lang-javascript --global --trust
 ```
 
-Use Vis 0.5.2 or later. Put Node 22.18 or newer, Bun 1.4.5 or newer, or both on `PATH`. Install
-Jest or Vitest in each project that declares it in `package.json`. Projects without either run on
-bun test or node:test.
+Use Vis 0.5.30 or later. Install Node 22.18 or newer with nvm or put it on `PATH`. Put Bun 1.4.5
+or newer on `PATH` for Bun projects. A `.nvmrc` or `.node-version` file selects an installed Node
+version from nvm. With no version file, the tools use Node on `PATH` or the nvm default.
+Install Jest or Vitest in each project that declares it in `package.json`. Projects without
+either run on bun test or node:test.
 
 ## Use
 

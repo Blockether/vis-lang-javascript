@@ -24,7 +24,7 @@ import threading
 import time
 from pathlib import Path
 
-from vis_lang_interface import RuntimeGone, runtime
+from vis_lang_interface import RuntimeGone, ToolMissing, runtime
 from vis_lang_interface.process import shell_call
 
 from vis_lang_javascript import runtimes
@@ -40,13 +40,12 @@ LOADER = (
     "const { pathToFileURL } = await import('node:url');"
     " await import(pathToFileURL(process.env.VIS_LANG_RENDEZVOUS + '/driver.mjs').href);"
 )
-"""Runs the driver from the runtime's rendezvous. The command line stays the same
-for every start in one directory, so a later process finds the runtime by it."""
+"""Runs the driver from the runtime's rendezvous and identifies a kept REPL."""
 
 
 def command(runtime):
     """The argv that runs the driver on `runtime`, a `runtimes.Runtime`."""
-    return (runtime.name, *runtime.eval_flags, "-e", LOADER)
+    return (runtime.binary or runtime.name, *runtime.eval_flags, "-e", LOADER)
 
 
 STARTUP_TIMEOUT_S = 20.0
@@ -91,7 +90,9 @@ class _Repl:
         self.env_fingerprint = dict(env_fingerprint or {})
         self.place = place
         self.runtime = runtime
-        self.version = ""
+        self.version = runtime.version.removeprefix("v")
+        self.source = runtime.source
+        self.binary = runtime.binary
         self.stuck = False
         self.interrupted = ""
         self.profile = {}
@@ -137,6 +138,7 @@ class _Repl:
         finally:
             self.lock.release()
         self.version = str(pong.get("version") or self.version)
+        self.binary = self.binary or str(pong.get("binary") or "")
         self.interrupted = str(pong.get("interrupted") or "")
         is_idle = pong.get("pong") is True
         if is_idle:
@@ -209,19 +211,25 @@ def _project_dir(options):
 
 
 def _displayed(cmd):
-    return [*cmd[:-2], f"<vis {cmd[0]} driver>"]
+    return [*cmd[:-2], f"<vis {Path(cmd[0]).name} driver>"]
 
 
-def _kept_directory(command):
-    """The rendezvous directory in the shell line of a kept REPL, or None."""
+def _kept_command(line):
+    """Read the exact runtime argv and rendezvous from a kept shell line."""
     try:
-        words = shlex.split(str(command or ""))
+        words = shlex.split(str(line or ""))
     except ValueError:
         return None
-    for word in words:
-        if word.startswith("3<>"):
-            return os.path.dirname(word[3:])
-    return None
+    if len(words) < 7 or words[0] != "exec":
+        return None
+    argv = words[1:-4]
+    kind = runtimes.RUNTIMES.get(Path(argv[0]).name)
+    if kind is None or tuple(argv[1:]) != command(kind)[1:]:
+        return None
+    requests = words[-4]
+    if not requests.startswith("3<>"):
+        return None
+    return kind, argv, os.path.dirname(requests[3:])
 
 
 def _saved(place, name):
@@ -246,27 +254,24 @@ def _kept(cwd):
     line = str(shell.get("command") or "")
     if str(shell.get("status")) != "running":
         return None
-    kind = next(
-        (
-            known
-            for known in runtimes.RUNTIMES.values()
-            if shlex.join(command(known)) in line
-        ),
-        None,
-    )
-    if kind is None:
-        return None
-    place = _kept_directory(line)
+    command_info = _kept_command(line)
+    if command_info is None:
+        raise ReplError("Cannot recognize the live REPL command. It was not stopped.")
+    kind, argv, place = command_info
     if not place or not os.path.isfile(os.path.join(place, "driver.mjs")):
-        return None
+        raise ReplError("Cannot find the files for the live REPL. It was not stopped.")
+    # Attach directly. runtime.start can replace a live shell if it cannot attach.
     try:
-        live = runtime.start(list(command(kind)), cwd=cwd, shell_id=sid)
-    except Exception:
-        return None
-    if live.pid != shell.get("pid"):
-        live.stop()
-        return None
+        meeting = runtime.Rendezvous(path=place).open()
+        live = runtime.Runtime(shell, meeting, argv, cwd, kept=True)
+    except OSError as ex:
+        raise ReplError("Cannot attach to the live REPL. It was not stopped.") from ex
     kept = _Repl(live, cwd, _saved(place, "env.json"), place, kind)
+    saved = _saved(place, "node.json")
+    kept.source = saved.get("source", "PATH" if argv[0] == "node" else "")
+    if os.path.isabs(argv[0]):
+        kept.binary = argv[0]
+    kept.version = saved.get("version", "")
     kept.profile = _saved(place, "profile.json")
     kept.setup = _saved(place, "setup.json")
     # An earlier process may have left code running in it.
@@ -291,10 +296,16 @@ def _status(cwd, repl):
     answer = {"result": "status", "cwd": cwd, "status": "up" if repl else "down"}
     if repl:
         answer["pid"] = repl.pid
-        answer["cmd"] = _displayed(list(command(repl.runtime)))
+        answer["cmd"] = _displayed(repl.live.command)
         answer["runtime"] = repl.runtime.name
         if repl.version:
-            answer["version"] = repl.version
+            answer["version"] = (
+                "v" + repl.version.removeprefix("v")
+                if repl.runtime.name == "node"
+                else repl.version
+            )
+        if repl.source:
+            answer["source"] = repl.source
         if repl.env_fingerprint:
             answer["env"] = dict(repl.env_fingerprint)
         if repl.profile:
@@ -304,23 +315,38 @@ def _status(cwd, repl):
     return answer
 
 
+def _node_note(repl):
+    """Say when the project now selects another Node, without replacing the live one."""
+    if repl.runtime.name != "node":
+        return []
+    try:
+        wanted = runtimes.choose(repl.cwd, "node")
+    except ToolMissing as ex:
+        return [f"Keeping the live REPL. {ex}"]
+    actual = repl.binary
+    if (actual and os.path.realpath(actual) != os.path.realpath(wanted.binary)) or (
+        repl.version
+        and repl.version.removeprefix("v") != wanted.version.removeprefix("v")
+    ):
+        return [
+            f"Keeping the live REPL. A new REPL would use Node {wanted.version}"
+            f" from {wanted.source} ({wanted.binary})."
+        ]
+    return []
+
+
 def status(options=None):
     cwd = _project_dir(options)
     repl = _live(cwd)
     # The ping also tells a kept REPL its version.
     is_busy = repl is not None and not repl.answers(ANSWER_CHECK_S)
     answer = _status(cwd, repl)
+    if repl is not None:
+        answer["notes"] = _node_note(repl)
     if is_busy:
         answer["busy"] = True
         answer["message"] = BUSY
     return answer
-
-
-def _version(text):
-    try:
-        return tuple(int(part) for part in str(text).split(".")[:3])
-    except ValueError:
-        return (0, 0)
 
 
 def start(options=None):
@@ -369,7 +395,11 @@ def start(options=None):
                     " then start it with this env."
                 )
             else:
+                if live.runtime.name == "node" and not live.version:
+                    live.answers(ANSWER_CHECK_S)
+                    answer = _status(cwd, live)
                 answer["result"] = "already-running"
+                answer["notes"] = _node_note(live)
             return answer
         chosen = runtimes.choose(cwd, wanted_runtime)
         meeting = runtime.Rendezvous(chosen.name).open()
@@ -382,11 +412,16 @@ def start(options=None):
             meeting.place(
                 "profile.json", json.dumps(dict(options.get("profile") or {}))
             )
+            if chosen.binary:
+                meeting.place(
+                    "node.json",
+                    json.dumps({"source": chosen.source, "version": chosen.version}),
+                )
             os.mkfifo(os.path.join(meeting.path, "interrupt"))
             live = runtime.start(
                 list(command(chosen)),
                 cwd=cwd,
-                env={k: v for k, v in (options.get("env") or {}).items()},
+                env=chosen.child_env(options.get("env")),
                 meeting=meeting,
                 shell_id=shell_id(cwd),
             )
@@ -403,9 +438,9 @@ def start(options=None):
             if pong.get("runtime") != chosen.name:
                 # For example the `node` that the oven/bun image links to bun.
                 raise ReplError(
-                    f"the `{chosen.name}` on PATH runs {pong.get('runtime') or 'an unknown runtime'}"
+                    f"`{chosen.binary or chosen.name}` runs {pong.get('runtime') or 'an unknown runtime'}"
                 )
-            if _version(repl.version) < chosen.minimum:
+            if runtimes.version_parts(repl.version) < chosen.minimum:
                 raise ReplError(
                     f"{chosen.label} {repl.version} is too old: the REPL needs"
                     f" {chosen.label} {'.'.join(map(str, chosen.minimum))} or newer"

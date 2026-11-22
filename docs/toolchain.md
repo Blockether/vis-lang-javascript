@@ -5,7 +5,20 @@
 `js.run_tests` and `js.repl_start` take `runtime`: `"auto"` (the default), `"node"` or `"bun"`.
 `"auto"` uses Bun when the project or its nearest parent up to the repository root has
 `bun.lock`, `bun.lockb` or `"packageManager": "bun@…"` in `package.json`. Another lockfile or package
-manager, or none, means Node. The tool raises `ToolMissing` when the runtime is not on `PATH`.
+manager, or none, means Node. Bun must be on `PATH`.
+
+For Node, the tools look for the nearest `.nvmrc` in the project directory or a parent. The
+search stops at the repository root. If no `.nvmrc` exists, the tools look for `.node-version`
+in the same directories. Blank lines and comments after `#` are ignored. The file can give a
+full or partial version (`v24.11.0`, `24.11`, or `24`) or an nvm alias (`node`, `stable`,
+`lts/*`, or a name in nvm's `alias` directory). A partial version selects the newest match.
+
+The tools read the installed versions from `$NVM_DIR/versions/node`, or `~/.nvm/versions/node`
+if `NVM_DIR` is not set. If a file requests a version that is not installed, the tools raise
+`ToolMissing`. Run `nvm install` in the directory with `.nvmrc`, or give it the version from
+`.node-version`. With no version file, the tools use Node on `PATH` or, if it is not there, the
+nvm `default` alias. Node must be 22.18 or newer. The selected Node bin directory is first on
+`PATH` for Node REPLs, Node tests, Jest, and Vitest.
 
 ## Test runs
 
@@ -30,10 +43,12 @@ run outlives `timeout_s`.
 
 ## REPL
 
-`js.repl_start` starts one `node` or `bun` process for each project directory. It needs Node 22.18
-or Bun 1.4.5 or newer on `PATH`. `require()` and `import()` resolve from that directory. The process keeps running across
-a sandbox restart. A live REPL is never replaced, because its state is your work. With
-`runtime="auto"` a live REPL is kept on its runtime; a start on another named runtime is refused.
+`js.repl_start` starts one `node` or `bun` process for each project directory. `require()` and
+`import()` resolve from that directory. The process keeps running across a sandbox restart. A live
+REPL is never replaced, because its state is your work. With `runtime="auto"` a live REPL keeps its
+runtime. A start on another named runtime is refused. The status shows the live Node version and
+its source. If the project now selects a different Node, the status tells you and keeps the live
+REPL. Stop it with `js.repl_stop` before you start a REPL on the new version.
 
 ### Environment
 

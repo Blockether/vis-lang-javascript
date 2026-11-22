@@ -43,7 +43,7 @@ def runner(root, runtime="auto"):
     for name in DECLARED:
         if name in declared:
             return name
-    return runtimes.choose(root, runtime).name
+    return runtimes.runtime_name(root, runtime)
 
 
 def binary(root, name):
@@ -312,13 +312,27 @@ def run(paths, *, root, keyword="", max_failures=0, timeout_s=900, runtime="auto
     """Run the project's test runner in `root` and count its report."""
     chosen = RUNNERS[runner(root, runtime)]
     name = chosen.name
+    # The Jest and Vitest scripts also use Node, via their shebang.
+    selected = None if name in DECLARED else runtimes.choose(root, name)
     work = process.run_directory("javascript-tests")
     try:
         is_junit = chosen.report == "junit"
         report = work / ("report.xml" if is_junit else "report.json")
         argv = chosen.argv(root, paths, report, keyword, max_failures)
+        if selected is None:
+            selected = runtimes.choose(root, "node")
+        if name == "node":
+            argv[0] = selected.binary
         started = time.monotonic()
-        ran = process.run(argv, cwd=root, timeout_s=timeout_s, read_write=[work])
+        ran = process.run(
+            argv,
+            cwd=root,
+            env=selected.child_env(process.call_env())
+            if selected.name == "node"
+            else None,
+            timeout_s=timeout_s,
+            read_write=[work],
+        )
         duration_ms = round((time.monotonic() - started) * 1000)
         printed = ANSI.sub("", (ran.out or "") + (ran.err or ""))
         output = printed[-OUTPUT_TAIL:]

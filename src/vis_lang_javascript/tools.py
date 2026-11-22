@@ -36,6 +36,8 @@ def _session(answer):
     if is_running and answer.get("runtime"):
         label = runtimes.label(answer["runtime"])
         detail.append(" ".join(filter(None, [label, answer.get("version")])))
+        if answer.get("source"):
+            detail.append(answer["source"])
     setup = answer.get("setup") or {}
     if is_running and setup.get("kind") == "nest":
         detail.append(
@@ -134,8 +136,10 @@ class JavaScriptTools:
         """Start a persistent REPL for this directory, or keep the live one.
 
         "auto" runs Bun when the project uses it (bun.lock, bun.lockb or
-        "packageManager": "bun@..."), else Node. It needs Node 22.18 or Bun
-        1.4.5 or newer on PATH. require and import() resolve from the directory.
+        "packageManager": "bun@..."), else Node. It needs Node 22.18 or newer
+        from nvm or PATH, or Bun 1.4.5 or newer on PATH. A .nvmrc or .node-version
+        file selects an installed Node from nvm. require and import() resolve
+        from the directory.
         A live REPL is never replaced, because its state is the work: "auto"
         keeps it, and a live REPL on another named runtime is refused. It gets
         the variables that a `before` op hook on `js.repl_start` adds with
@@ -151,8 +155,8 @@ class JavaScriptTools:
         svc refuses a request-scoped or transient provider: use await resolve(X).
         A `.vis/js-repl.cjs` in cwd or a parent can export before(ctx) and
         bindings(ctx). An interrupted eval fails at its next fetch, HTTP, pg or
-        ioredis call. Raises ToolMissing when the runtime is not on PATH and
-        RuntimeError when it fails its startup handshake.
+        ioredis call. Raises ToolMissing when the runtime is not installed or
+        is too old, and RuntimeError when it fails its startup handshake.
         """
         directory = self._absolute(cwd)
         options = {"cwd": str(directory), "runtime": runtime}
@@ -175,7 +179,7 @@ class JavaScriptTools:
         answer = repl.start(options)
         if answer.get("result") == "failed":
             raise RuntimeError(answer.get("message") or "The REPL did not start")
-        return _session(dict(answer, notes=notes))
+        return _session(dict(answer, notes=[*(answer.get("notes") or []), *notes]))
 
     def repl_status(
         self,

@@ -64,7 +64,7 @@ lines.on('line', (line) => {
   let req;
   try { req = JSON.parse(line); } catch (err) { return answer({ ok: false, exc: 'bad request: ' + err.message }); }
   if (req.op === 'ping') {
-    return answer({ id: req.id, ok: true, pong: !repl.busy, runtime: repl.runtime, version: repl.version, interrupted: repl.lastInterrupt });
+    return answer({ id: req.id, ok: true, pong: !repl.busy, runtime: repl.runtime, version: repl.version, binary: process.execPath, interrupted: repl.lastInterrupt });
   }
   if (req.op === 'setup') {
     return setup.then(

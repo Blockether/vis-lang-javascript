@@ -1,8 +1,13 @@
 """The managed REPL keeps its state and never leaves a child behind, on Node and Bun."""
 
-import pytest
+import os
+import shlex
+import shutil
 
-from vis_lang_javascript import repl
+import pytest
+from test_runtimes import fake_node
+
+from vis_lang_javascript import repl, runtimes
 from vis_lang_javascript.repl import ReplError
 from vis_lang_javascript.tools import JavaScriptTools
 
@@ -183,3 +188,57 @@ def test_an_env_file_reaches_the_repl(project, tmp_path):
         cwd=cwd,
     )
     assert answer.value == "[ 'hello', undefined, undefined, undefined ]"
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_pinned_and_legacy_node_repls_keep_their_state_after_reattach(
+    tmp_path, node, monkeypatch, legacy
+):
+    # A wrapper acts like one nvm install, and forwards driver calls to real Node.
+    installed = shutil.which(node)
+    current = runtimes.choose(tmp_path, "node").version
+    home = tmp_path / "nvm install"
+    bins = home / "versions" / "node"
+    selected = fake_node(
+        bins / current / "bin", current, f'exec {shlex.quote(installed)} "$@"\n'
+    )
+    other = "v99.1.0"
+    fake_node(bins / other / "bin", other)
+    monkeypatch.setenv("NVM_DIR", str(home))
+    cwd = str(tmp_path)
+    pin = tmp_path / ".nvmrc"
+    tools = JavaScriptTools()
+    try:
+        if legacy:
+            # v0.2.1 started bare `node` and left no source metadata.
+            with monkeypatch.context() as old:
+                old.setattr(runtimes, "choose", lambda *_args: runtimes.NODE)
+                assert tools.repl_start(cwd=cwd).is_running
+        else:
+            pin.write_text(current + "\n")
+            started = tools.repl_start(cwd=cwd)
+            assert f"Node {current} · .nvmrc" in started.detail
+            assert started.command[0] == str(selected)
+            value = tools.repl_eval(
+                f"process.env.PATH.split({os.pathsep!r})[0]", cwd=cwd
+            ).value
+            assert str(selected.parent) in value
+        tools.repl_eval("const stored = 17", cwd=cwd)
+        repl.detach_all()
+        status = tools.repl_status(cwd=cwd)
+        assert f"Node {current}" in status.detail
+        if not legacy:
+            assert "· .nvmrc" in status.detail
+        pin.write_text(other + "\n")
+        changed = tools.repl_status(cwd=cwd)
+        assert (
+            f"Keeping the live REPL. A new REPL would use Node {other}"
+            in changed.detail
+        )
+        assert f"already running · Node {current}" in tools.repl_start(cwd=cwd).detail
+        assert tools.repl_eval("stored", cwd=cwd).value == "17"
+        pin.write_text("91\n")
+        assert "nvm install" in tools.repl_start(cwd=cwd).detail
+        assert tools.repl_eval("stored", cwd=cwd).value == "17"
+    finally:
+        tools.repl_stop(cwd=cwd)
