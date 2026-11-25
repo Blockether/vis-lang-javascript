@@ -1,12 +1,12 @@
 [project]
 name = "vis-lang-javascript"
-version = "0.2.3"
+version = "0.2.4"
 description = "JavaScript and TypeScript tools for Vis on Node.js and Bun: test runs and a managed REPL."
 keywords = ["javascript", "typescript"]
 requires-python = ">=3.12"
 dependencies = [
   "vis-agent>=0.5.30",
-  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v4.1.0",
+  "vis-lang-interface @ git+https://github.com/Blockether/vis-lang-interface@v4.2.2",
 ]
 
 [dependency-groups]

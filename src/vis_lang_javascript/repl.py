@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from vis_lang_interface import RuntimeGone, ToolMissing, runtime
-from vis_lang_interface.process import shell_call
+from vis_lang_interface.process import attach_shell
 
 from vis_lang_javascript import runtimes
 
@@ -248,11 +248,11 @@ def _kept(cwd):
     """
     sid = shell_id(cwd)
     try:
-        shell = shell_call()({"op": "logs", "id": sid, "offset": -1})
+        shell = attach_shell(sid)
     except Exception:
         return None
-    line = str(shell.get("command") or "")
-    if str(shell.get("status")) != "running":
+    line = str(shell.command or "")
+    if str(shell.status) != "running":
         return None
     command_info = _kept_command(line)
     if command_info is None:
