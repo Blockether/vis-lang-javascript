@@ -73,20 +73,13 @@ PROMPT = prompt.routing(
     "js",
     ("run_tests", "repl_start", "repl_status", "repl_eval", "repl_stop"),
     notes=(
-        "`js.repl_eval` runs JavaScript or TypeScript in one Node or Bun process for each"
-        " project directory: types are stripped, declarations stay and top-level await works."
-        " Load modules with `require()` or `await import()`; a static `import` works on Bun only.",
-        '`runtime="auto"` picks Bun when the project has bun.lock, bun.lockb or'
-        ' `"packageManager": "bun@..."`, else Node; pass "node" or "bun" to choose.',
-        "For Node, the nearest .nvmrc, or .node-version if there is no .nvmrc, selects an"
-        " installed nvm version. With no version file, use Node on PATH or the nvm default."
-        " A live REPL keeps its Node version until you stop it.",
-        "`js.run_tests` runs Vitest or Jest when package.json declares it, else bun test on"
-        ' Bun or node:test on Node. Jest and Vitest do not accept `runtime="bun"`.'
-        " node:test requires `max_failures=0`.",
-        '`js.repl_start(nest="auto")` loads a built NestJS app without listening or init:'
-        " `svc(name)`, `get(Class)`, `services()` and `methods(Class)` reach its providers."
-        ' `env_file=".env"` gives the REPL the variables of a dotenv file.',
+        "`js.repl_eval` runs JavaScript or TypeScript in the REPL that `js.repl_start` started."
+        " Load modules with `require()` or `await import()`.",
+        '`runtime="auto"` picks Bun for a Bun project, else Node. A `.nvmrc` or `.node-version`'
+        " file selects the Node version.",
+        "`js.run_tests` runs the Vitest or Jest of the project, else bun test or node:test.",
+        '`js.repl_start(nest="auto")` loads a built NestJS app without listening;'
+        " `doc(js.repl_start)` lists its functions.",
     ),
     tools=JavaScriptTools,
 )
@@ -112,7 +105,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-javascript",
         description="JavaScript and TypeScript tools on Node.js and Bun: test runs and a managed REPL.",
-        version="0.2.5",
+        version="0.2.6",
         alias="js",
         symbols=[
             vis.Symbol(JavaScriptTools(workspace_root=vis.workspace_root), name="js")
