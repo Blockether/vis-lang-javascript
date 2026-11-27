@@ -146,6 +146,26 @@ def test_an_unknown_runtime_is_refused(tmp_path):
         JavaScriptTools().run_tests(cwd=str(tmp_path), runtime="deno")
 
 
+@pytest.mark.parametrize("max_failures", [1, -1, True, 1.5])
+def test_node_refuses_an_unsupported_failure_limit(tmp_path, monkeypatch, max_failures):
+    def started(*args, **kwargs):
+        pytest.fail("The runner must refuse the option before starting a child.")
+
+    monkeypatch.setattr(runner.runtimes, "choose", started)
+    with pytest.raises(ValueError, match="max_failures"):
+        JavaScriptTools().run_tests(
+            cwd=str(tmp_path), runtime="node", max_failures=max_failures
+        )
+
+
+@pytest.mark.parametrize("name", ["jest", "vitest"])
+@pytest.mark.parametrize("runtime", ["bun", "deno"])
+def test_declared_runner_refuses_runtime_it_cannot_use(tmp_path, name, runtime):
+    (tmp_path / "package.json").write_text(json.dumps({"devDependencies": {name: "1"}}))
+    with pytest.raises(ValueError, match="runtime"):
+        JavaScriptTools().run_tests(cwd=str(tmp_path), runtime=runtime)
+
+
 def test_a_json_report_counts_cases_and_a_file_that_failed_to_load(tmp_path):
     report = {
         "numTotalTests": 3,

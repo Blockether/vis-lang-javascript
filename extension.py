@@ -82,7 +82,8 @@ PROMPT = prompt.routing(
         " installed nvm version. With no version file, use Node on PATH or the nvm default."
         " A live REPL keeps its Node version until you stop it.",
         "`js.run_tests` runs Vitest or Jest when package.json declares it, else bun test on"
-        " Bun or node:test on Node.",
+        ' Bun or node:test on Node. Jest and Vitest do not accept `runtime="bun"`.'
+        " node:test requires `max_failures=0`.",
         '`js.repl_start(nest="auto")` loads a built NestJS app without listening or init:'
         " `svc(name)`, `get(Class)`, `services()` and `methods(Class)` reach its providers."
         ' `env_file=".env"` gives the REPL the variables of a dotenv file.',
@@ -111,7 +112,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-javascript",
         description="JavaScript and TypeScript tools on Node.js and Bun: test runs and a managed REPL.",
-        version="0.2.4",
+        version="0.2.5",
         alias="js",
         symbols=[
             vis.Symbol(JavaScriptTools(workspace_root=vis.workspace_root), name="js")

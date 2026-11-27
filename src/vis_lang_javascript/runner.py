@@ -32,6 +32,10 @@ DECLARED = ("vitest", "jest")
 def runner(root, runtime="auto"):
     """The runner the project declares: vitest, then jest, else the built-in
     runner of the runtime, bun or node."""
+    if runtime not in runtimes.CHOICES:
+        raise ValueError(
+            f"runtime must be one of {', '.join(runtimes.CHOICES)}, not {runtime!r}"
+        )
     try:
         manifest = json.loads((Path(root) / "package.json").read_text("utf-8"))
     except (OSError, ValueError):
@@ -42,6 +46,8 @@ def runner(root, runtime="auto"):
     }
     for name in DECLARED:
         if name in declared:
+            if runtime == "bun":
+                raise ValueError(f"{name} uses Node; runtime='bun' is not supported")
             return name
     return runtimes.runtime_name(root, runtime)
 
@@ -310,8 +316,12 @@ RUNNERS = {
 
 def run(paths, *, root, keyword="", max_failures=0, timeout_s=900, runtime="auto"):
     """Run the project's test runner in `root` and count its report."""
+    if type(max_failures) is not int or max_failures < 0:
+        raise ValueError("max_failures must be a nonnegative integer")
     chosen = RUNNERS[runner(root, runtime)]
     name = chosen.name
+    if name == "node" and max_failures:
+        raise ValueError("node:test does not support max_failures; use 0")
     # The Jest and Vitest scripts also use Node, via their shebang.
     selected = None if name in DECLARED else runtimes.choose(root, name)
     work = process.run_directory("javascript-tests")

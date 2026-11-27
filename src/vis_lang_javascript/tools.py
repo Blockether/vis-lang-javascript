@@ -84,7 +84,7 @@ class JavaScriptTools:
         keyword: Annotated[str, "Run only the tests whose name matches."] = "",
         max_failures: Annotated[
             int,
-            "Stop after this many failures (Jest and Vitest --bail); 0 runs every test.",
+            "Set the failure limit for Bun, Jest or Vitest; 0 disables the limit.",
         ] = 0,
         timeout_s: Annotated[int, "Seconds before the run is abandoned."] = 900,
         runtime: Annotated[
@@ -98,8 +98,8 @@ class JavaScriptTools:
         project's node_modules/.bin. Counts and failures come from the report
         the runner writes: JSON for Jest and Vitest, JUnit for bun test and
         node:test. A directory given to node:test runs its *.test.* and *.spec.*
-        files. node:test has no failure limit, so it runs every test. Raises
-        ToolMissing when a declared runner or the runtime is not installed and
+        files. node:test refuses a nonzero max_failures. Jest and Vitest refuse
+        runtime="bun". Raises ToolMissing when the runner or runtime is not installed and
         ToolTimeout when the run outlives timeout_s.
         """
         paths = string_list(paths)
