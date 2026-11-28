@@ -105,7 +105,7 @@ vis.register_extension(
     vis.Extension(
         name="vis-lang-javascript",
         description="JavaScript and TypeScript tools on Node.js and Bun: test runs and a managed REPL.",
-        version="0.2.7",
+        version="0.2.8",
         alias="js",
         symbols=[
             vis.Symbol(JavaScriptTools(workspace_root=vis.workspace_root), name="js")
